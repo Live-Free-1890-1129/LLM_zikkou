@@ -1,3 +1,5 @@
+
+
 <!doctype html>
 <html lang="ja">
 <head>
@@ -5,46 +7,63 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Browser LLM Chat</title>
   <style>
-    body { margin:0; font-family: system-ui, sans-serif; background:#0b0b0c; color:#f1f1f3; }
-    header { background:#111; padding:14px 20px; border-bottom:1px solid #222; }
-    main { max-width:900px; margin:0 auto; padding:20px; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#0b0b0c; color:#f1f1f3; }
+    header { background:#111; padding:14px 20px; border-bottom:1px solid #222; display:flex; justify-content:space-between; align-items:center;}
+    main { max-width:980px; margin:0 auto; padding:20px; }
     select, input, button, textarea {
-      background:#161618; color:#f1f1f3; border:1px solid #2a2a2f; border-radius:10px;
-      padding:10px; font-size:14px;
+      background:#161618; color:#f1f1f3; border:1px solid #2a2a2f; border-radius:10px; padding:10px; font-size:14px;
     }
     textarea { width:100%; min-height:80px; resize:vertical; }
     .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; }
-    .input-group { display:flex; flex-direction:column; }
-    .dropdown { margin-top:4px; font-size:13px; }
-    .dropdown option { background:#101012; color:#f1f1f3; }
+    .input-group { display:flex; flex-direction:column; min-width:260px; }
     .row { display:flex; gap:10px; margin-top:10px; }
-    .role { width:80px; color:#aaa; font-size:12px; text-transform:uppercase; }
+    .role { width:84px; color:#aaa; font-size:12px; text-transform:uppercase; }
     .bubble { background:#131316; border:1px solid #2a2a2f; border-radius:14px; padding:10px 14px; flex:1; white-space:pre-wrap; }
     #progress { height:6px; background:#1a1a1d; border-radius:3px; overflow:hidden; margin:8px 0; }
     #bar { height:100%; width:0%; background:#4da3ff; transition:width .25s ease; }
+    .hint { color:#9aa0a6; font-size:12px; }
+    .small { font-size:12px; padding:6px 8px; border-radius:8px; }
+    optgroup[label] { color:#b6c8ff; font-weight:600; font-style:normal; }
   </style>
 </head>
 <body>
-  <header><b>Browser LLM Chat</b> <span style="font-size:12px;color:#888">WebGPUでローカル推論</span></header>
+  <header>
+    <div><b>Browser LLM Chat</b> <span class="hint">（WebGPUでローカル推論）</span></div>
+    <div id="gpu" class="hint">GPU: 検出中…</div>
+  </header>
+
   <main>
     <div class="toolbar">
-      <div class="input-group">
-        <label>モデル<select id="model"></select></label>
+      <div class="input-group" style="min-width:360px;">
+        <label>モデル
+          <select id="model"></select>
+        </label>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+          <label class="hint"><input type="checkbox" id="onlyDownloaded"> ダウンロード済みのみ表示</label>
+          <button id="refresh" class="small">再スキャン</button>
+          <span class="hint">★=ダウンロード済み / 7Bまで自動抽出</span>
+        </div>
       </div>
+
       <div class="input-group">
-        <label>最大トークン<input type="number" id="maxTokens" value="512" min="32" max="2048" step="32"></label>
-        <select id="maxPreset" class="dropdown">
-          <option value="">▼ プリセット選択</option>
+        <label>最大トークン
+          <input type="number" id="maxTokens" value="512" min="32" max="4096" step="32">
+        </label>
+        <select id="maxPreset" class="small">
+          <option value="">▼ プリセット</option>
           <option value="32">32（短文）</option>
           <option value="64">64（簡潔）</option>
-          <option value="256">256（説明）</option>
+          <option value="256">256（数行の説明）</option>
           <option value="1024">1024（長文）</option>
-          <option value="2048">2048（物語）</option>
+          <option value="2048">2048（物語級）</option>
         </select>
       </div>
+
       <div class="input-group">
-        <label>温度<input type="number" id="temp" value="0.7" min="0" max="1.5" step="0.1"></label>
-        <select id="tempPreset" class="dropdown">
+        <label>温度
+          <input type="number" id="temp" value="0.7" min="0" max="1.5" step="0.1">
+        </label>
+        <select id="tempPreset" class="small">
           <option value="">▼ 用途を選択</option>
           <option value="0.2">論理問題</option>
           <option value="0.3">要約</option>
@@ -52,11 +71,14 @@
           <option value="0.7">普通の会話・説明文</option>
           <option value="0.9">詩・物語</option>
           <option value="1.1">アイデア生成</option>
-          <option value="1.5">実験的</option>
+          <option value="1.5">実験的にのみ推奨</option>
         </select>
       </div>
-      <button id="load">モデル読み込み</button>
-      <button id="clear">履歴クリア</button>
+
+      <div class="input-group" style="min-width:220px;">
+        <button id="load">モデル読み込み</button>
+        <button id="clear">履歴クリア</button>
+      </div>
     </div>
 
     <div id="progress" hidden><div id="bar"></div></div>
@@ -67,68 +89,150 @@
   </main>
 
   <script type="module">
-    import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
+    import { CreateMLCEngine, prebuiltAppConfig } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
+    const appConfig = prebuiltAppConfig;
 
-    const modelSel = document.getElementById("model");
-    const loadBtn = document.getElementById("load");
-    const clearBtn = document.getElementById("clear");
-    const sendBtn = document.getElementById("send");
-    const input = document.getElementById("input");
-    const progress = document.getElementById("progress");
-    const bar = document.getElementById("bar");
-    const log = document.getElementById("log");
+    const $ = s => document.querySelector(s);
+    const gpu = $("#gpu");
+    const modelSel = $("#model");
+    const onlyDownloaded = $("#onlyDownloaded");
+    const refreshBtn = $("#refresh");
+    const maxTokensEl = $("#maxTokens");
+    const tempEl = $("#temp");
+    const maxPreset = $("#maxPreset");
+    const tempPreset = $("#tempPreset");
+    const loadBtn = $("#load");
+    const clearBtn = $("#clear");
+    const sendBtn = $("#send");
+    const input = $("#input");
+    const log = $("#log");
+    const progress = $("#progress");
+    const bar = $("#bar");
 
-    const maxTokensEl = document.getElementById("maxTokens");
-    const tempEl = document.getElementById("temp");
-    const maxPreset = document.getElementById("maxPreset");
-    const tempPreset = document.getElementById("tempPreset");
+    gpu.textContent = navigator.gpu ? "GPU: WebGPU 利用可能" : "GPU: WebGPU 非対応";
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
 
-    const models = [
-      // 軽量
-      "Phi-3.5-mini-instruct-q4f16_1-MLC",
-      "Phi-3.5-mini-instruct-q4f16_1-MLC-1k",
-      "Gemma-2-2b-it-q4f16_1-MLC",
-      // 7Bクラス（強力）
-      "Mistral-7B-Instruct-q4f16_1-MLC",
-      "Qwen2.5-7B-Instruct-q4f16_1-MLC",
-      "Llama-3.2-8B-Instruct-q4f16_1-MLC"
-    ];
+    // ---- 7Bまで抽出 & ダウンロード済み検出 ----
+    function human(id){ return id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1'); }
+    function sizeB(id){
+      const m = id.match(/-(\d+(?:\.\d+)?)\s*[bB]/);  // "-7B", "-3.1B" など
+      return m ? parseFloat(m[1]) : null;
+    }
+    const LS_KEY = 'downloaded_models';
+    const getLocalDownloaded = () => new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]'));
+    const saveLocalDownloaded = set => localStorage.setItem(LS_KEY, JSON.stringify([...set]));
+    async function guessDownloadedByIndexedDB(candidateIds){
+      const found = new Set();
+      try{
+        if (!('databases' in indexedDB)) return found;
+        const dbs = await indexedDB.databases();
+        const names = (dbs||[]).map(d => (d.name||'').toLowerCase());
+        for (const id of candidateIds){
+          const key = id.toLowerCase();
+          if (names.some(n => n.includes(key))) found.add(id);
+        }
+      }catch{}
+      return found;
+    }
 
-    models.forEach(m => {
-      const opt = document.createElement("option");
-      opt.value = m;
-      opt.textContent = m;
-      modelSel.appendChild(opt);
-    });
+    async function rebuildMenu(){
+      // 公式一覧→7B以下を抽出（サイズ不明は一旦候補に含める）
+      const all = (appConfig.model_list||[])
+        .map(m => m?.model_id).filter(Boolean)
+        .filter(id => {
+          const s = sizeB(id);
+          return (s == null || s <= 7.01); // 7Bまで
+        });
 
+      // instruct/it を優先
+      const isPref = id => /(-Instruct-|[-_.]it[-_.])/i.test(id) && /q4/i.test(id);
+      const orderBySize = (a,b) => {
+        const sa = sizeB(a) ?? 99, sb = sizeB(b) ?? 99;
+        return sa - sb;
+      };
+
+      // ダウンロード済み推定
+      const local = getLocalDownloaded();
+      const idxdb = await guessDownloadedByIndexedDB(all);
+      const downloaded = new Set([...local, ...idxdb]);
+
+      const ordered = [...all].sort((a,b)=>{
+        const r = (downloaded.has(a)?0:1) - (downloaded.has(b)?0:1);
+        if (r !== 0) return r;
+        const p = (isPref(a)?0:1) - (isPref(b)?0:1);
+        if (p !== 0) return p;
+        return orderBySize(a,b);
+      });
+
+      // DOM
+      modelSel.innerHTML = '';
+      const ogDL = document.createElement('optgroup'); ogDL.label = '★ ダウンロード済み（7Bまで）';
+      const ogAll = document.createElement('optgroup'); ogAll.label = 'すべて（7Bまで）';
+
+      for (const id of ordered){
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = downloaded.has(id) ? `${human(id)} ★` : human(id);
+        (downloaded.has(id) ? ogDL : ogAll).appendChild(opt);
+      }
+
+      if (onlyDownloaded.checked) {
+        modelSel.appendChild(ogDL);
+      } else {
+        modelSel.appendChild(ogDL);
+        modelSel.appendChild(ogAll);
+      }
+
+      const last = localStorage.getItem('model_id');
+      if (last && [...modelSel.options].some(o=>o.value===last)) modelSel.value = last;
+      if (!modelSel.value && modelSel.options.length) modelSel.selectedIndex = 0;
+    }
+
+    onlyDownloaded.addEventListener('change', rebuildMenu);
+    refreshBtn.addEventListener('click', rebuildMenu);
+    await rebuildMenu();
+
+    // ---- プリセット反映 ----
+    maxPreset.addEventListener('change', e => { if (e.target.value) maxTokensEl.value = e.target.value; e.target.selectedIndex=0; });
+    tempPreset.addEventListener('change', e => { if (e.target.value) tempEl.value = e.target.value; e.target.selectedIndex=0; });
+
+    // ---- チャット処理 ----
     let engine = null;
     let chatHistory = [];
 
-    // UI動作
-    maxPreset.onchange = e => { if (e.target.value) maxTokensEl.value = e.target.value; e.target.selectedIndex=0; };
-    tempPreset.onchange = e => { if (e.target.value) tempEl.value = e.target.value; e.target.selectedIndex=0; };
-
     function pushMessage(role, text) {
-      const row = document.createElement("div");
-      row.className = "row";
-      row.innerHTML = `<div class="role">${role}</div><div class="bubble">${text}</div>`;
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `<div class="role">${role}</div><div class="bubble"></div>`;
+      row.querySelector('.bubble').textContent = text;
       log.appendChild(row);
-      row.scrollIntoView({ behavior:"smooth", block:"end" });
+      row.scrollIntoView({ behavior:'smooth', block:'end' });
     }
-
-    function setProgress(p) {
+    function setProgress(p){
       progress.hidden = false;
       bar.style.width = `${Math.round(p*100)}%`;
-      if (p >= 1) setTimeout(()=>{progress.hidden=true;bar.style.width="0%";},400);
+      if (p>=1) setTimeout(()=>{ progress.hidden=true; bar.style.width='0%'; }, 400);
     }
 
     async function loadModel() {
-      const id = modelSel.value;
-      pushMessage("system", `モデル読み込み中: ${id}`);
-      engine = await CreateMLCEngine(id, {
-        initProgressCallback: (r)=>{ if (r.progress) setProgress(r.progress); }
-      });
-      pushMessage("system", `準備完了: ${id}`);
+      const modelId = modelSel.value;
+      setProgress(0.01);
+      pushMessage('system', `モデル読み込み中: ${modelId}`);
+      try{
+        engine = await CreateMLCEngine(modelId, {
+          appConfig,
+          initProgressCallback: r => { if (r.progress != null) setProgress(r.progress); }
+        });
+        pushMessage('system', `準備完了: ${modelId}`);
+        // 記録→次回は★で上位表示
+        const set = getLocalDownloaded(); set.add(modelId); saveLocalDownloaded(set);
+        localStorage.setItem('model_id', modelId);
+        await rebuildMenu();
+      }catch(e){
+        console.error(e);
+        pushMessage('system', `読み込みエラー: ${String(e?.message||e)}`);
+        throw e;
+      }
     }
 
     async function send() {
@@ -136,32 +240,32 @@
       if (!text) return;
       if (!engine) await loadModel();
 
-      pushMessage("user", text);
-      chatHistory.push({ role:"user", content:text });
-      input.value = "";
+      input.value = '';
+      pushMessage('user', text);
+      chatHistory.push({ role:'user', content:text });
 
       const chunks = await engine.chat.completions.create({
         messages: chatHistory,
         stream: true,
         temperature: parseFloat(tempEl.value),
-        max_tokens: parseInt(maxTokensEl.value,10)
+        max_tokens: parseInt(maxTokensEl.value,10),
       });
 
-      let acc = "";
-      pushMessage("assistant", "");
-      const last = log.lastElementChild.querySelector(".bubble");
-      for await (const ch of chunks) {
-        const delta = ch?.choices?.[0]?.delta?.content ?? "";
-        if (delta) { acc += delta; last.textContent = acc; }
+      let acc = '';
+      pushMessage('assistant','');
+      const last = log.lastElementChild.querySelector('.bubble');
+
+      for await (const ch of chunks){
+        const delta = ch?.choices?.[0]?.delta?.content ?? '';
+        if (delta){ acc += delta; last.textContent = acc; }
       }
-      chatHistory.push({ role:"assistant", content:acc });
+      chatHistory.push({ role:'assistant', content:acc });
     }
 
-    loadBtn.onclick = loadModel;
-    clearBtn.onclick = ()=>{ log.innerHTML=""; chatHistory=[]; };
-    sendBtn.onclick = send;
-    input.addEventListener("keydown", e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} });
+    document.getElementById('load').addEventListener('click', loadModel);
+    document.getElementById('clear').addEventListener('click', ()=>{ chatHistory=[]; log.innerHTML=''; });
+    document.getElementById('send').addEventListener('click', send);
+    input.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }});
   </script>
 </body>
 </html>
-
