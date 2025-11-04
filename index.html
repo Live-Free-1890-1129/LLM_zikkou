@@ -3,79 +3,72 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Browser LLM Chat (GitHub Pages)</title>
+  <title>Browser LLM Chat</title>
   <style>
-    :root { --bg:#0b0b0c; --fg:#e7e7ea; --muted:#a0a0ab; --acc:#4da3ff; }
-    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto;
-           background:var(--bg); color:var(--fg); }
-    header { padding:16px 20px; border-bottom:1px solid #222; position:sticky; top:0;
-             background:rgba(11,11,12,.8); backdrop-filter: blur(6px);}
+    body { margin:0; font-family: system-ui, sans-serif; background:#0b0b0c; color:#f1f1f3; }
+    header { background:#111; padding:14px 20px; border-bottom:1px solid #222; }
     main { max-width:900px; margin:0 auto; padding:20px; }
-    .row { display:flex; gap:12px; align-items:flex-start; margin:12px 0;}
-    .role { width:80px; flex:0 0 80px; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em;}
-    .bubble { flex:1; background:#131316; border:1px solid #232327; padding:14px 16px; border-radius:14px; white-space:pre-wrap; }
-    .me .bubble { border-color:#2b3a52; }
-    .model .bubble { border-color:#2b2b2f; }
-    .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 18px; }
-    input, select, button, textarea {
-      background:#121216; color:var(--fg); border:1px solid #2a2a2f; border-radius:10px;
-      padding:10px 12px; font-size:14px;
+    select, input, button, textarea {
+      background:#161618; color:#f1f1f3; border:1px solid #2a2a2f; border-radius:10px;
+      padding:10px; font-size:14px;
     }
     textarea { width:100%; min-height:80px; resize:vertical; }
-    button { cursor:pointer; }
-    #progress { height:6px; background:#1a1a1d; border-radius:3px; overflow:hidden; margin-top:8px; }
-    #bar { height:100%; width:0%; background:var(--acc); transition: width .25s ease; }
-    .hint { color:var(--muted); font-size:12px; }
-    .badge { display:inline-block; font-size:11px; padding:2px 6px; border:1px solid #2a2a2f; border-radius:8px; margin-left:6px; color:#cfe6ff; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; }
+    .input-group { display:flex; flex-direction:column; }
+    .dropdown { margin-top:4px; font-size:13px; }
+    .dropdown option { background:#101012; color:#f1f1f3; }
+    .row { display:flex; gap:10px; margin-top:10px; }
+    .role { width:80px; color:#aaa; font-size:12px; text-transform:uppercase; }
+    .bubble { background:#131316; border:1px solid #2a2a2f; border-radius:14px; padding:10px 14px; flex:1; white-space:pre-wrap; }
+    #progress { height:6px; background:#1a1a1d; border-radius:3px; overflow:hidden; margin:8px 0; }
+    #bar { height:100%; width:0%; background:#4da3ff; transition:width .25s ease; }
   </style>
 </head>
 <body>
-  <header>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
-      <div><strong>Browser LLM Chat</strong> <span class="hint">（WebGPUでローカル推論）</span></div>
-      <div class="hint" id="gpu-info">GPU: 検出中…</div>
-    </div>
-  </header>
-
+  <header><b>Browser LLM Chat</b> <span style="font-size:12px;color:#888">WebGPUでローカル推論</span></header>
   <main>
     <div class="toolbar">
-      <label>モデル
-        <select id="model"></select>
-      </label>
-      <label>最大トークン <input id="maxTokens" type="number" value="512" min="64" max="4096" /></label>
-      <label>温度 <input id="temp" type="number" value="0.7" min="0" max="1.5" step="0.1" /></label>
-      <button id="load">モデルを読み込み</button>
+      <div class="input-group">
+        <label>モデル<select id="model"></select></label>
+      </div>
+      <div class="input-group">
+        <label>最大トークン<input type="number" id="maxTokens" value="512" min="32" max="2048" step="32"></label>
+        <select id="maxPreset" class="dropdown">
+          <option value="">▼ プリセット選択</option>
+          <option value="32">32（短文）</option>
+          <option value="64">64（簡潔）</option>
+          <option value="256">256（数行の説明）</option>
+          <option value="1024">1024（長文）</option>
+          <option value="2048">2048（物語級）</option>
+        </select>
+      </div>
+      <div class="input-group">
+        <label>温度<input type="number" id="temp" value="0.7" min="0" max="1.5" step="0.1"></label>
+        <select id="tempPreset" class="dropdown">
+          <option value="">▼ 用途を選択</option>
+          <option value="0.2">論理問題</option>
+          <option value="0.3">要約</option>
+          <option value="0.4">翻訳</option>
+          <option value="0.7">普通の会話・説明文</option>
+          <option value="0.9">詩・物語</option>
+          <option value="1.1">アイデア生成</option>
+          <option value="1.5">実験的にのみ使用推奨</option>
+        </select>
+      </div>
+      <button id="load">モデル読み込み</button>
       <button id="clear">履歴クリア</button>
     </div>
 
     <div id="progress" hidden><div id="bar"></div></div>
     <div id="log"></div>
 
-    <div style="margin-top:16px;">
-      <textarea id="input" placeholder="メッセージを入力して、エンターで送信"></textarea>
-      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px;">
-        <button id="send">送信</button>
-      </div>
-      <div class="hint">初回はモデルのダウンロードがあります（IndexedDBにキャッシュ。次回以降は高速）。</div>
-    </div>
+    <textarea id="input" placeholder="メッセージを入力して Enter"></textarea>
+    <button id="send" style="margin-top:8px;">送信</button>
   </main>
 
   <script type="module">
-    // GPU案内
-    const gpuInfo = document.getElementById('gpu-info');
-    gpuInfo.textContent = navigator.gpu ? "GPU: WebGPU 利用可能" : "GPU: WebGPU 非対応（WASMフォールバック検討）";
-
-    // SW登録（同一オリジンのみキャッシュ）
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').catch(console.warn);
-    }
-
-    // WebLLM（バージョン固定＋公式モデル一覧）
     import { CreateMLCEngine, prebuiltAppConfig } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
     const appConfig = prebuiltAppConfig;
-
-    let engine = null;
-    let chatHistory = [];
 
     const $ = s => document.querySelector(s);
     const log = $("#log");
@@ -88,159 +81,90 @@
     const bar = $("#bar");
     const maxTokensEl = $("#maxTokens");
     const tempEl = $("#temp");
+    const maxPreset = $("#maxPreset");
+    const tempPreset = $("#tempPreset");
 
-    // ---- ダウンロード済みモデルの推定ロジック ----
-    const LS_KEY = 'downloaded_models';
-    const getLocalDownloaded = () => new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]'));
-    const saveLocalDownloaded = (set) => localStorage.setItem(LS_KEY, JSON.stringify([...set]));
+    let engine = null;
+    let chatHistory = [];
 
-    async function guessDownloadedByIndexedDB(candidateIds) {
-      const found = new Set();
-      try {
-        if (!('databases' in indexedDB)) return found; // 未対応ブラウザ
-        const dbs = await indexedDB.databases();      // [{name, version}, ...]
-        const names = (dbs || []).map(d => (d.name || '').toLowerCase());
-        for (const id of candidateIds) {
-          const key = id.toLowerCase();
-          if (names.some(n => n.includes(key))) found.add(id);
-        }
-      } catch { /* ブラウザ差吸収: 無視 */ }
-      return found;
+    // ---- プリセット反映 ----
+    maxPreset.addEventListener("change", e => {
+      if (e.target.value) maxTokensEl.value = e.target.value;
+      e.target.selectedIndex = 0;
+    });
+    tempPreset.addEventListener("change", e => {
+      if (e.target.value) tempEl.value = e.target.value;
+      e.target.selectedIndex = 0;
+    });
+
+    // ---- モデルリスト構築 ----
+    for (const m of (appConfig.model_list || [])) {
+      const opt = document.createElement("option");
+      opt.value = m.model_id;
+      opt.textContent = m.model_id;
+      modelSel.appendChild(opt);
     }
 
-    // モデルメニュー生成（ダウンロード済みを上位表示）
-    async function buildModelMenu() {
-      const all = (appConfig.model_list || []).filter(m => m?.model_id);
-      const prefer = m => /(-Instruct-|[-_.]it[-_.])/i.test(m.model_id) && /q4/i.test(m.model_id);
-      const size = id => (id.match(/-(\d+)[bB]/)?.[1] ?? 9999) * 1;
-
-      // 候補を軽い順で並べる
-      const sorted = [...all].sort((a,b)=> size(a.model_id) - size(b.model_id));
-
-      // ダウンロード済み推定
-      const local = getLocalDownloaded();
-      const idxdb = await guessDownloadedByIndexedDB(sorted.map(m=>m.model_id));
-      const downloaded = new Set([...local, ...idxdb]);
-
-      // 並び順: 1) ダウンロード済み, 2) instruct+q4, 3) その他
-      const keyRank = (id) => downloaded.has(id) ? 0 : 1;
-      const keyPref = (id) => prefer({model_id:id}) ? 0 : 1;
-
-      const ordered = [...sorted].sort((a,b)=>{
-        const r = keyRank(a.model_id) - keyRank(b.model_id);
-        if (r !== 0) return r;
-        const p = keyPref(a.model_id) - keyPref(b.model_id);
-        if (p !== 0) return p;
-        return size(a.model_id) - size(b.model_id);
-      });
-
-      // DOM反映（上限30件）
-      const pretty = id => {
-        const t = id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1');
-        return downloaded.has(id) ? `${t} ` : t;
-      };
-      modelSel.innerHTML = '';
-      let count = 0;
-      for (const m of ordered) {
-        const opt = document.createElement('option');
-        opt.value = m.model_id;
-        opt.textContent = pretty(m.model_id);
-        if (downloaded.has(m.model_id)) opt.textContent += '★'; // ダウンロード済み印
-        modelSel.appendChild(opt);
-        if (++count >= 30) break;
-      }
-
-      // 前回選択を復元
-      const last = localStorage.getItem('model_id');
-      if (last && [...modelSel.options].some(o=>o.value===last)) modelSel.value = last;
-      if (!modelSel.value && modelSel.options.length) modelSel.selectedIndex = 0;
-    }
-
-    modelSel.addEventListener('change', ()=> localStorage.setItem('model_id', modelSel.value));
-    await buildModelMenu();
-
-    // ---- UIユーティリティ ----
+    // ---- 出力関数 ----
     function pushMessage(role, text) {
-      const row = document.createElement('div');
-      row.className = `row ${role === 'user' ? 'me' : 'model'}`;
-      row.innerHTML = `<div class="role">${role}</div><div class="bubble"></div>`;
-      row.querySelector('.bubble').textContent = text;
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = `<div class="role">${role}</div><div class="bubble">${text}</div>`;
       log.appendChild(row);
-      row.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      row.scrollIntoView({ behavior:"smooth", block:"end" });
     }
-
     function setProgress(p) {
       progress.hidden = false;
       bar.style.width = `${Math.round(p*100)}%`;
-      if (p >= 1) setTimeout(()=>{ progress.hidden = true; bar.style.width='0%'; }, 400);
+      if (p >= 1) setTimeout(()=>{progress.hidden=true;bar.style.width="0%";},400);
     }
 
     // ---- モデル読み込み ----
     async function loadModel() {
       const modelId = modelSel.value;
+      pushMessage("system", `モデル読み込み中: ${modelId}`);
       setProgress(0.01);
-      pushMessage('system', `モデル読み込み中: ${modelId}`);
-      try {
-        engine = await CreateMLCEngine(modelId, {
-          appConfig,
-          initProgressCallback: (r) => {
-            if (r.progress != null) setProgress(r.progress);
-            if (r.text) console.log('[webllm]', r.text);
-          }
-        });
-        pushMessage('system', `準備完了: ${modelId}`);
-
-        // 成功したモデルを「ダウンロード済み」として記録 → 次回上位へ
-        const set = getLocalDownloaded();
-        set.add(modelId);
-        saveLocalDownloaded(set);
-        await buildModelMenu();
-      } catch (e) {
-        console.error(e);
-        pushMessage('system', `読み込みエラー: ${String(e?.message || e)}`);
-        throw e;
-      }
+      engine = await CreateMLCEngine(modelId, {
+        appConfig,
+        initProgressCallback: (r)=>{
+          if (r.progress) setProgress(r.progress);
+        }
+      });
+      pushMessage("system", `準備完了: ${modelId}`);
     }
 
-    // ---- 送信処理 ----
-    loadBtn.addEventListener('click', async () => {
-      loadBtn.disabled = true;
-      try { await loadModel(); } finally { loadBtn.disabled = false; }
-    });
-
-    clearBtn.addEventListener('click', () => { chatHistory = []; log.innerHTML = ''; });
-
+    // ---- チャット送信 ----
     async function send() {
       const text = input.value.trim();
       if (!text) return;
       if (!engine) await loadModel();
 
-      input.value = '';
-      pushMessage('user', text);
+      input.value = "";
+      pushMessage("user", text);
       chatHistory.push({ role: "user", content: text });
 
       const chunks = await engine.chat.completions.create({
         messages: chatHistory,
         stream: true,
-        temperature: parseFloat(tempEl.value || "0.7"),
-        max_tokens: parseInt(maxTokensEl.value || "512", 10),
+        temperature: parseFloat(tempEl.value),
+        max_tokens: parseInt(maxTokensEl.value,10),
       });
 
-      let acc = '';
-      pushMessage('assistant', '');
-      const last = log.lastElementChild.querySelector('.bubble');
-
+      let acc = "";
+      pushMessage("assistant", "");
+      const last = log.lastElementChild.querySelector(".bubble");
       for await (const ch of chunks) {
         const delta = ch?.choices?.[0]?.delta?.content ?? "";
         if (delta) { acc += delta; last.textContent = acc; }
       }
-      chatHistory.push({ role: "assistant", content: acc });
+      chatHistory.push({ role:"assistant", content:acc });
     }
 
-    sendBtn.addEventListener('click', send);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-    });
+    loadBtn.addEventListener("click", loadModel);
+    clearBtn.addEventListener("click", ()=>{ chatHistory=[]; log.innerHTML=""; });
+    sendBtn.addEventListener("click", send);
+    input.addEventListener("keydown", e => { if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); }});
   </script>
 </body>
 </html>
+
