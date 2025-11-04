@@ -19,8 +19,9 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
+  // 重要：CDNなど別オリジンは触らない（モデル取得を邪魔しない）
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return; // ← CDN(別オリジン)は触らない
+  if (url.origin !== self.location.origin) return;
 
   event.respondWith((async () => {
     try {
