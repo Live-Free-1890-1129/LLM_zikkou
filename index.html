@@ -39,13 +39,9 @@
   <main>
     <div class="toolbar">
       <label>モデル
-        <select id="model">
-          <option value="Llama-3.2-3B-Instruct-q4f16_1">Llama-3.2-3B q4f16_1</option>
-          <option value="Qwen2.5-3B-Instruct-q4f16_1">Qwen2.5-3B q4f16_1</option>
-          <option value="Gemma-2-2B-it-q4f16_1">Gemma 2 2B it q4f16_1</option>
-        </select>
+        <select id="model"></select>
       </label>
-      <label>最大トークン <input id="maxTokens" type="number" value="512" min="64" max="2048" /></label>
+      <label>最大トークン <input id="maxTokens" type="number" value="512" min="64" max="4096" /></label>
       <label>温度 <input id="temp" type="number" value="0.7" min="0" max="1.5" step="0.1" /></label>
       <button id="load">モデルを読み込み</button>
       <button id="clear">履歴クリア</button>
@@ -59,13 +55,13 @@
       <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px;">
         <button id="send">送信</button>
       </div>
-      <div class="hint">初回はモデルのダウンロードがあります（キャッシュされ、次回以降は高速）。</div>
+      <div class="hint">初回はモデルのダウンロードがあります（IndexedDBにキャッシュされ、次回以降は高速）。</div>
     </div>
   </main>
 
-  <!-- ここから下が “必ず” <script type="module"> の中 -->
+  <!-- ここからJS -->
   <script type="module">
-    // WebGPU表示
+    // GPU案内
     const gpuInfo = document.getElementById('gpu-info');
     gpuInfo.textContent = navigator.gpu ? "GPU: WebGPU 利用可能" : "GPU: WebGPU 非対応（WASMフォールバック検討）";
 
@@ -74,18 +70,9 @@
       navigator.serviceWorker.register('./sw.js').catch(console.warn);
     }
 
-    // WebLLM（バージョン固定）
-    import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
-
-    // 明示的な model_list
-    const HF_BASE = "https://huggingface.co/mlc-ai/web-llm-models/resolve/main";
-    const appConfig = {
-      model_list: [
-        { model_id: "Llama-3.2-3B-Instruct-q4f16_1", model_url: `${HF_BASE}/Llama-3.2-3B-Instruct-q4f16_1/`, model_lib: "webllm" },
-        { model_id: "Qwen2.5-3B-Instruct-q4f16_1",   model_url: `${HF_BASE}/Qwen2.5-3B-Instruct-q4f16_1/`,   model_lib: "webllm" },
-        { model_id: "Gemma-2-2B-it-q4f16_1",         model_url: `${HF_BASE}/Gemma-2-2B-it-q4f16_1/`,         model_lib: "webllm" }
-      ]
-    };
+    // WebLLM（バージョン固定＋公式モデル一覧を使用）
+    import { CreateMLCEngine, prebuiltAppConfig } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
+    const appConfig = prebuiltAppConfig;
 
     let engine = null;
     let chatHistory = [];
@@ -102,6 +89,37 @@
     const maxTokensEl = $("#maxTokens");
     const tempEl = $("#temp");
 
+    // 公開モデルからセレクトを自動生成
+    function buildModelMenu() {
+      // instruct/it かつ q4 系を優先し、軽い順に最大30件
+      const prefer = m => /(-Instruct-|[-_.]it[-_.])/i.test(m.model_id) && /q4/i.test(m.model_id);
+      const size = id => (id.match(/-(\d+)[bB]/)?.[1] ?? 9999) * 1;
+      const all = (appConfig.model_list || []).filter(m => m?.model_id);
+      const ordered = [
+        ...all.filter(prefer).sort((a,b)=> size(a.model_id)-size(b.model_id)),
+        ...all.filter(m=>!prefer(m)).sort((a,b)=> size(a.model_id)-size(b.model_id))
+      ];
+      const seen = new Set();
+      const pick = [];
+      for (const m of ordered) {
+        if (!seen.has(m.model_id)) { seen.add(m.model_id); pick.push(m); }
+        if (pick.length >= 30) break;
+      }
+      const pretty = id => id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1');
+      modelSel.innerHTML = '';
+      for (const m of pick) {
+        const opt = document.createElement('option');
+        opt.value = m.model_id;
+        opt.textContent = pretty(m.model_id);
+        modelSel.appendChild(opt);
+      }
+      const last = localStorage.getItem('model_id');
+      if (last && [...modelSel.options].some(o=>o.value===last)) modelSel.value = last;
+      if (!modelSel.value && modelSel.options.length) modelSel.selectedIndex = 0;
+    }
+    buildModelMenu();
+    modelSel.addEventListener('change', ()=> localStorage.setItem('model_id', modelSel.value));
+
     function pushMessage(role, text) {
       const row = document.createElement('div');
       row.className = `row ${role === 'user' ? 'me' : 'model'}`;
@@ -114,7 +132,7 @@
     function setProgress(p) {
       progress.hidden = false;
       bar.style.width = `${Math.round(p*100)}%`;
-      if (p >= 1) setTimeout(() => { progress.hidden = true; bar.style.width = '0%'; }, 400);
+      if (p >= 1) setTimeout(()=>{ progress.hidden = true; bar.style.width='0%'; }, 400);
     }
 
     async function loadModel() {
@@ -124,9 +142,9 @@
       try {
         engine = await CreateMLCEngine(modelId, {
           appConfig,
-          initProgressCallback: (report) => {
-            if (report.progress != null) setProgress(report.progress);
-            if (report.text) console.log('[webllm]', report.text);
+          initProgressCallback: (r) => {
+            if (r.progress != null) setProgress(r.progress);
+            if (r.text) console.log('[webllm]', r.text);
           }
         });
         pushMessage('system', `準備完了: ${modelId}`);
@@ -139,8 +157,7 @@
 
     loadBtn.addEventListener('click', async () => {
       loadBtn.disabled = true;
-      try { await loadModel(); }
-      finally { loadBtn.disabled = false; }
+      try { await loadModel(); } finally { loadBtn.disabled = false; }
     });
 
     clearBtn.addEventListener('click', () => { chatHistory = []; log.innerHTML = ''; });
