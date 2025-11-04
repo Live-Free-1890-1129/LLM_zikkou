@@ -116,13 +116,12 @@
 </main>
 
 <script type="module">
-  // 依存
   import { CreateMLCEngine, prebuiltAppConfig } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
   import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.mjs";
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
 
-  // --- フェイルオーバー付き appConfig 取得 ---
+  // ===== フェイルオーバー付き appConfig 取得（トップレベル await 使わない） =====
   async function getAppConfig() {
     try { if (prebuiltAppConfig?.model_list?.length) return prebuiltAppConfig; } catch {}
     const urls = [
@@ -133,9 +132,13 @@
     for (const u of urls) {
       try {
         const r = await fetch(u, { cache: "no-store" });
-        if (r.ok) { const j = await r.json(); if (j?.model_list?.length) return j; }
+        if (r.ok) {
+          const j = await r.json();
+          if (j?.model_list?.length) return j;
+        }
       } catch {}
     }
+    // 最低限の内蔵リスト（7Bまで）
     return {
       model_list: [
         { model_id: "Phi-3.5-mini-instruct-q4f16_1-MLC" },
@@ -147,10 +150,9 @@
       ]
     };
   }
-  const appConfig = await getAppConfig();
 
-  // DOM
-  const $=s=>document.querySelector(s);
+  // ===== ユーティリティ =====
+  const $ = s => document.querySelector(s);
   const gpu=$("#gpu"), modelSel=$("#model"), onlyDownloaded=$("#onlyDownloaded"),
         refreshBtn=$("#refresh"), maxTokensEl=$("#maxTokens"), tempEl=$("#temp"),
         maxPreset=$("#maxPreset"), tempPreset=$("#tempPreset"), loadBtn=$("#load"),
@@ -161,10 +163,6 @@
         summAllBtn=$("#summAll"), summSelBtn=$("#summSel"),
         ragQuery=$("#ragQuery"), askRagBtn=$("#askRag");
 
-  gpu.textContent = navigator.gpu ? "GPU: WebGPU 利用可能" : "GPU: WebGPU 非対応";
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
-
-  // モデル選択（7Bまで＋★）
   function human(id){ return id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1'); }
   function sizeB(id){ const m=id.match(/-([\d.]+)\s*[bB](?!yte)/); return m?parseFloat(m[1]):null; }
   const LS_KEY='downloaded_models';
@@ -178,8 +176,27 @@
       for(const id of ids){ const key=id.toLowerCase(); if(names.some(n=>n.includes(key))) found.add(id); }
     }catch{} return found;
   }
+
+  // ===== グローバル状態 =====
+  let APP_CONFIG = null;
+  let engine = null, chatHistory = [];
+  const store = []; // {id,name,type,text,chunks:[{id,text,docId,idx}]}
+  let index = null;
+
+  // ===== 画面メッセ＆進捗 =====
+  function pushMessage(role,text){
+    const row=document.createElement('div'); row.className='row';
+    row.innerHTML=`<div class="role">${role}</div><div class="bubble"></div>`;
+    row.querySelector('.bubble').textContent=text; log.appendChild(row);
+    row.scrollIntoView({behavior:'smooth',block:'end'});
+  }
+  function setProgress(p){ progress.hidden=false; bar.style.width=`${Math.round(p*100)}%`;
+    if(p>=1) setTimeout(()=>{progress.hidden=true;bar.style.width='0%';},400); }
+
+  // ===== モデルメニュー =====
   async function rebuildMenu(){
-    const all=(appConfig.model_list||[]).map(m=>m?.model_id).filter(Boolean)
+    const all=((APP_CONFIG?.model_list)||[])
+      .map(m=>m?.model_id).filter(Boolean)
       .filter(id=>{ const s=sizeB(id); return (s==null || s<=7.01); });
     const isPref=id=>/(-Instruct-|[-_.]it[-_.])/i.test(id)&&/q4/i.test(id);
     const orderBySize=(a,b)=>(sizeB(a)??99)-(sizeB(b)??99);
@@ -204,30 +221,28 @@
     if(onlyDownloaded.checked) modelSel.appendChild(ogDL);
     else { modelSel.appendChild(ogDL); modelSel.appendChild(ogAll); }
 
+    if(!modelSel.options.length){
+      const warn=document.createElement('div');
+      warn.className='hint'; warn.style.cssText='margin-top:6px;color:#ffb;';
+      warn.textContent='モデル一覧が空です。ネットワーク/拡張機能/キャッシュを確認してください。';
+      modelSel.parentElement.appendChild(warn);
+      console.warn("model_list is empty", APP_CONFIG);
+    }
+
     const last=localStorage.getItem('model_id');
     if(last&&[...modelSel.options].some(o=>o.value===last)) modelSel.value=last;
     if(!modelSel.value&&modelSel.options.length) modelSel.selectedIndex=0;
   }
-  onlyDownloaded.addEventListener('change',rebuildMenu);
-  refreshBtn.addEventListener('click',rebuildMenu);
-  await rebuildMenu();
 
-  // LLM
-  let engine=null, chatHistory=[];
-  function pushMessage(role,text){ const row=document.createElement('div'); row.className='row';
-    row.innerHTML=`<div class="role">${role}</div><div class="bubble"></div>`;
-    row.querySelector('.bubble').textContent=text; log.appendChild(row);
-    row.scrollIntoView({behavior:'smooth',block:'end'}); }
-  function setProgress(p){ progress.hidden=false; bar.style.width=`${Math.round(p*100)}%`;
-    if(p>=1) setTimeout(()=>{progress.hidden=true;bar.style.width='0%';},400); }
+  // ===== LLM =====
   async function loadModel(){
     const id=modelSel.value; setProgress(0.01); pushMessage('system',`モデル読み込み中: ${id}`);
     try{
-      engine=await CreateMLCEngine(id,{appConfig,initProgressCallback:r=>{if(r.progress!=null)setProgress(r.progress);}});
+      engine=await CreateMLCEngine(id,{appConfig:APP_CONFIG,initProgressCallback:r=>{if(r.progress!=null)setProgress(r.progress);}});
       pushMessage('system',`準備完了: ${id}`);
       const set=getLocalDownloaded(); set.add(id); saveLocalDownloaded(set);
       localStorage.setItem('model_id',id); await rebuildMenu();
-    }catch(e){ console.error(e); pushMessage('system',`読み込みエラー: ${String(e?.message||e)}`); throw e; }
+    }catch(e){ console.error(e); pushMessage('system',`読み込みエラー: ${String(e?.message||e)}`); }
   }
   async function send(){
     const text=input.value.trim(); if(!text) return; if(!engine) await loadModel();
@@ -240,18 +255,8 @@
     for await (const ch of chunks){ const d=ch?.choices?.[0]?.delta?.content??''; if(d){acc+=d; last.textContent=acc;} }
     chatHistory.push({role:'assistant',content:acc});
   }
-  loadBtn.addEventListener('click',loadModel);
-  clearBtn.addEventListener('click',()=>{chatHistory=[];log.innerHTML='';});
-  sendBtn.addEventListener('click',send);
-  input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
-  maxPreset.addEventListener('change',e=>{if(e.target.value)maxTokensEl.value=e.target.value;e.target.selectedIndex=0;});
-  tempPreset.addEventListener('change',e=>{if(e.target.value)tempEl.value=e.target.value;e.target.selectedIndex=0;});
 
-  // ドキュメント（PDF抽出＋索引＋RAG）
-  import * as pdfjs from "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.mjs";
-  pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
-
-  const store=[]; let index=null;
+  // ===== ドキュメント（PDF抽出＋索引＋RAG） =====
   function looksTextFile(n){ return /\.(txt|md|markdown|json|csv|log|html?|xml|ya?ml)$/i.test(n); }
   function uid(){ return Math.random().toString(36).slice(2); }
   function renderDocList(){
@@ -260,14 +265,14 @@
       <td>${d.name}</td><td>${d.type}</td>
       <td>${(d.text.length/1024).toFixed(1)} KB</td><td>${d.chunks.length}</td></tr>`
     )).join('');
-    $("#docList").innerHTML=
+    docList.innerHTML=
       `<table><thead><tr><th></th><th>名前</th><th>タイプ</th><th>サイズ</th><th>チャンク</th></tr></thead>
         <tbody>${rows||'<tr><td colspan="5" class="hint" style="padding:10px">未取り込み</td></tr>'}</tbody></table>`;
   }
   function chunkText(t,n){ const a=[]; for(let i=0;i<t.length;i+=n) a.push(t.slice(i,i+n)); return a; }
   async function parsePDF(file){
     const arr=new Uint8Array(await file.arrayBuffer());
-    const pdf=await pdfjs.getDocument({data:arr}).promise; let text='';
+    const pdf=await pdfjsLib.getDocument({data:arr}).promise; let text='';
     for(let p=1;p<=pdf.numPages;p++){ const page=await pdf.getPage(p);
       const content=await page.getTextContent();
       const pageText=content.items.map(it=>('str' in it)?it.str:'').join('');
@@ -275,7 +280,7 @@
     } return text;
   }
   async function handleFiles(files){
-    const size=parseInt($("#chunkChars").value||'2000',10);
+    const size=parseInt(chunkCharsEl.value||'2000',10);
     for(const f of files){
       let text='';
       if(looksTextFile(f.name)) text=await f.text();
@@ -286,10 +291,6 @@
       pushMessage('system',`📂 取り込み: ${f.name}（${chunks.length} チャンク）`);
     } renderDocList();
   }
-  $("#fileInput").addEventListener('change',e=>{ if(e.target.files?.length) handleFiles(e.target.files); });
-  ;['dragenter','dragover'].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.add('drag');}));
-  ;['dragleave','drop'].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.remove('drag');}));
-  $("#drop").addEventListener('drop',e=>{ const files=[...(e.dataTransfer?.files||[])]; if(files.length) handleFiles(files); });
 
   function tokenize(s){ return s.toLowerCase().replace(/[^a-z0-9\u3040-\u30ff\u4e00-\u9fff]+/g,' ')
     .split(/\s+/).filter(t=>t && t.length>1); }
@@ -309,28 +310,75 @@
     });
     return [...scores.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8).map(([i,sc])=>({idx:i,score:sc}));
   }
-  $("#reindex").addEventListener('click',()=>{ buildIndex(); pushMessage('system',`🔧 索引を再構築しました（${index?.N||0} チャンク）`); });
 
+  // ===== 初期化（順序保証・トップレベル await 不使用） =====
+  async function init(){
+    // GPU 表示・SW
+    gpu.textContent = navigator.gpu ? "GPU: WebGPU 利用可能" : "GPU: WebGPU 非対応";
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
+
+    // app-config を先に確実に取る
+    APP_CONFIG = await getAppConfig();
+
+    // イベント登録
+    refreshBtn.addEventListener('click', rebuildMenu);
+    onlyDownloaded.addEventListener('change', rebuildMenu);
+    loadBtn.addEventListener('click', loadModel);
+    clearBtn.addEventListener('click', ()=>{ chatHistory=[]; log.innerHTML=''; });
+    sendBtn.addEventListener('click', send);
+    input.addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); }});
+    maxPreset.addEventListener('change', e=>{ if(e.target.value) maxTokensEl.value=e.target.value; e.target.selectedIndex=0; });
+    tempPreset.addEventListener('change', e=>{ if(e.target.value) tempEl.value=e.target.value; e.target.selectedIndex=0; });
+
+    fileInput.addEventListener('change', e=>{ if(e.target.files?.length) handleFiles(e.target.files); });
+    ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.add('drag'); }));
+    ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.remove('drag'); }));
+    drop.addEventListener('drop', e=>{ const files=[...(e.dataTransfer?.files||[])]; if(files.length) handleFiles(files); });
+
+    reindexBtn.addEventListener('click', ()=>{ buildIndex(); pushMessage('system',`🔧 索引を再構築しました（${index?.N||0} チャンク）`); });
+    summAllBtn.addEventListener('click', async ()=>{
+      const chunks=store.flatMap(d=>d.chunks);
+      if(!chunks.length){ pushMessage('system','要約対象がありません'); return; }
+      if(!engine) await loadModel();
+      await summarizeChunks(chunks,'全ドキュメント');
+    });
+    summSelBtn.addEventListener('click', async ()=>{
+      const picks=[...docList.querySelectorAll('.sel')].filter(x=>x.checked);
+      if(!picks.length){ pushMessage('system','選択がありません'); return; }
+      const idx=picks.map(x=>parseInt(x.dataset.i,10)); const chunks=idx.flatMap(i=>store[i].chunks);
+      if(!engine) await loadModel();
+      await summarizeChunks(chunks, idx.map(i=>store[i].name).join(', '));
+    });
+    askRagBtn.addEventListener('click', askRag);
+
+    // モデルメニュー描画（app-config 取得後に呼ぶ！）
+    await rebuildMenu();
+
+    // ドキュメント一覧の初期描画
+    renderDocList();
+  }
+
+  // 要約（map-reduce）
   async function summarizeChunks(chunks,title){
-    if(!engine) await loadModel(); const partial=[]; let n=0;
+    const partial=[]; let n=0;
     for(const ch of chunks){
       const prompt=`次のテキストを日本語で150〜250字に要約してください。\n---\n${ch.text}\n---`;
-      const res=await engine.chat.completions.create({ messages:[{role:'user',content:prompt}], stream:false, temperature:0.3, max_tokens:512 });
-      partial.push(`● ${(res?.choices?.[0]?.message?.content)||''}`); if(++n%3===0) pushMessage('system',`要約進行: ${n}/${chunks.length}`);
+      const res=await engine.chat.completions.create({
+        messages:[{role:'user',content:prompt}], stream:false, temperature:0.3, max_tokens:512
+      });
+      partial.push(`● ${(res?.choices?.[0]?.message?.content)||''}`);
+      if(++n%3===0) pushMessage('system',`要約進行: ${n}/${chunks.length}`);
     }
     const reducePrompt=`以下の断片要約を統合し、重複を除いて重要点・結論・数値・注意点を日本語で300〜500字にまとめてください。\n---\n${partial.join('\n')}\n---`;
-    const final=await engine.chat.completions.create({ messages:[{role:'user',content:reducePrompt}], stream:false, temperature:0.3, max_tokens:512 });
+    const final=await engine.chat.completions.create({
+      messages:[{role:'user',content:reducePrompt}], stream:false, temperature:0.3, max_tokens:512
+    });
     pushMessage('assistant',`【要約: ${title}】\n${final?.choices?.[0]?.message?.content||''}`);
   }
-  $("#summAll").addEventListener('click',async()=>{ const chunks=store.flatMap(d=>d.chunks);
-    if(!chunks.length){ pushMessage('system','要約対象がありません'); return; } await summarizeChunks(chunks,'全ドキュメント'); });
-  $("#summSel").addEventListener('click',async()=>{ const picks=[...$("#docList").querySelectorAll('.sel')].filter(x=>x.checked);
-    if(!picks.length){ pushMessage('system','選択がありません'); return; }
-    const idx=picks.map(x=>parseInt(x.dataset.i,10)); const chunks=idx.flatMap(i=>store[i].chunks);
-    await summarizeChunks(chunks, idx.map(i=>store[i].name).join(', ')); });
 
-  $("#askRag").addEventListener('click', async ()=>{
-    const q=$("#ragQuery").value.trim(); if(!q){ pushMessage('system','質問を入力してください'); return; }
+  // RAG 質問
+  async function askRag(){
+    const q=ragQuery.value.trim(); if(!q){ pushMessage('system','質問を入力してください'); return; }
     if(!engine) await loadModel(); if(!index) buildIndex();
     const hits=scoreQuery(q); if(!hits.length){ pushMessage('system','索引にヒットしませんでした'); return; }
     const all=store.flatMap(d=>d.chunks);
@@ -345,10 +393,16 @@
     let acc=''; pushMessage('assistant',''); const last=log.lastElementChild.querySelector('.bubble');
     for await (const ch of chunks){ const d=ch?.choices?.[0]?.delta?.content??''; if(d){acc+=d; last.textContent=acc;} }
     chatHistory.push({role:'assistant',content:acc});
-  });
+  }
 
-  // 初期
-  (function init(){ renderDocList(); })();
+  // 起動！
+  init().catch(e=>{
+    console.error("init failed", e);
+    const div=document.createElement("div");
+    div.style.cssText="margin:8px 0;padding:8px;border:1px solid #5a2;border-radius:8px;background:#141a14;color:#cff;";
+    div.textContent="初期化に失敗しました: "+(e?.message||e);
+    document.getElementById("log").prepend(div);
+  });
 </script>
 </body>
 </html>
