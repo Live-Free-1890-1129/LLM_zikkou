@@ -35,7 +35,7 @@
 </header>
 
 <main>
-  <!-- ====== LLM 操作バー ====== -->
+  <!-- LLM 操作バー -->
   <div class="toolbar">
     <div class="input-group" style="min-width:360px;">
       <label>モデル<select id="model"></select></label>
@@ -70,7 +70,7 @@
     </div>
   </div>
 
-  <!-- ====== ファイル読み込み + PDF抽出 ====== -->
+  <!-- ドキュメント + PDF抽出 -->
   <div class="panel" style="margin-top:12px;">
     <b>📂 ドキュメント</b> <span class="hint">（TXT/MD/JSON/CSV/LOG/HTML/XML/YAML/PDF）</span>
     <div class="toolbar" style="margin-top:8px;">
@@ -108,7 +108,7 @@
     </div>
   </div>
 
-  <!-- ====== チャット ====== -->
+  <!-- チャット -->
   <div id="progress" hidden><div id="bar"></div></div>
   <div id="log"></div>
   <textarea id="input" placeholder="通常のチャットはこちら。Enterで送信"></textarea>
@@ -116,16 +116,41 @@
 </main>
 
 <script type="module">
-  // ===== 依存：WebLLM と pdf.js（ES Module） =====
+  // 依存
   import { CreateMLCEngine, prebuiltAppConfig } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
   import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.mjs";
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
 
-  const appConfig = prebuiltAppConfig;
+  // --- フェイルオーバー付き appConfig 取得 ---
+  async function getAppConfig() {
+    try { if (prebuiltAppConfig?.model_list?.length) return prebuiltAppConfig; } catch {}
+    const urls = [
+      "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.63/app-config.json",
+      "https://unpkg.com/@mlc-ai/web-llm@0.2.63/app-config.json",
+      "https://raw.githubusercontent.com/mlc-ai/web-llm/main/app-config/app-config.json"
+    ];
+    for (const u of urls) {
+      try {
+        const r = await fetch(u, { cache: "no-store" });
+        if (r.ok) { const j = await r.json(); if (j?.model_list?.length) return j; }
+      } catch {}
+    }
+    return {
+      model_list: [
+        { model_id: "Phi-3.5-mini-instruct-q4f16_1-MLC" },
+        { model_id: "Phi-3.5-mini-instruct-q4f16_1-MLC-1k" },
+        { model_id: "Gemma-2-2b-it-q4f16_1-MLC" },
+        { model_id: "Mistral-7B-Instruct-q4f16_1-MLC" },
+        { model_id: "Qwen2.5-7B-Instruct-q4f16_1-MLC" },
+        { model_id: "Llama-3.2-8B-Instruct-q4f16_1-MLC" }
+      ]
+    };
+  }
+  const appConfig = await getAppConfig();
 
-  // ===== DOM =====
-  const $ = s => document.querySelector(s);
+  // DOM
+  const $=s=>document.querySelector(s);
   const gpu=$("#gpu"), modelSel=$("#model"), onlyDownloaded=$("#onlyDownloaded"),
         refreshBtn=$("#refresh"), maxTokensEl=$("#maxTokens"), tempEl=$("#temp"),
         maxPreset=$("#maxPreset"), tempPreset=$("#tempPreset"), loadBtn=$("#load"),
@@ -139,9 +164,9 @@
   gpu.textContent = navigator.gpu ? "GPU: WebGPU 利用可能" : "GPU: WebGPU 非対応";
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
 
-  // ===== モデル選択（7Bまで + ★上位） =====
+  // モデル選択（7Bまで＋★）
   function human(id){ return id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1'); }
-  function sizeB(id){ const m = id.match(/-(\d+(?:\.\d+)?)\s*[bB]/); return m?parseFloat(m[1]):null; }
+  function sizeB(id){ const m=id.match(/-([\d.]+)\s*[bB](?!yte)/); return m?parseFloat(m[1]):null; }
   const LS_KEY='downloaded_models';
   const getLocalDownloaded=()=>new Set(JSON.parse(localStorage.getItem(LS_KEY)||'[]'));
   const saveLocalDownloaded=set=>localStorage.setItem(LS_KEY,JSON.stringify([...set]));
@@ -155,7 +180,7 @@
   }
   async function rebuildMenu(){
     const all=(appConfig.model_list||[]).map(m=>m?.model_id).filter(Boolean)
-      .filter(id=>{const s=sizeB(id); return (s==null||s<=7.01); });
+      .filter(id=>{ const s=sizeB(id); return (s==null || s<=7.01); });
     const isPref=id=>/(-Instruct-|[-_.]it[-_.])/i.test(id)&&/q4/i.test(id);
     const orderBySize=(a,b)=>(sizeB(a)??99)-(sizeB(b)??99);
 
@@ -187,7 +212,7 @@
   refreshBtn.addEventListener('click',rebuildMenu);
   await rebuildMenu();
 
-  // ===== LLM エンジン =====
+  // LLM
   let engine=null, chatHistory=[];
   function pushMessage(role,text){ const row=document.createElement('div'); row.className='row';
     row.innerHTML=`<div class="role">${role}</div><div class="bubble"></div>`;
@@ -219,177 +244,110 @@
   clearBtn.addEventListener('click',()=>{chatHistory=[];log.innerHTML='';});
   sendBtn.addEventListener('click',send);
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
-
   maxPreset.addEventListener('change',e=>{if(e.target.value)maxTokensEl.value=e.target.value;e.target.selectedIndex=0;});
   tempPreset.addEventListener('change',e=>{if(e.target.value)tempEl.value=e.target.value;e.target.selectedIndex=0;});
 
-  // ===== ドキュメント管理（PDF抽出 + チャンク化 + 索引） =====
-  const store = []; // {id,name,type,text,chunks:[{id,text,docId,idx}]}
-  let index = null; // {df:Map, docs:[{id,terms:Map,len}], inv:Map(term -> [{docId,chunkIdx,tf}])}
+  // ドキュメント（PDF抽出＋索引＋RAG）
+  import * as pdfjs from "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.mjs";
+  pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
 
-  function looksTextFile(name){ return /\.(txt|md|markdown|json|csv|log|html?|xml|ya?ml)$/i.test(name); }
+  const store=[]; let index=null;
+  function looksTextFile(n){ return /\.(txt|md|markdown|json|csv|log|html?|xml|ya?ml)$/i.test(n); }
   function uid(){ return Math.random().toString(36).slice(2); }
-
   function renderDocList(){
-    const rows = store.map((d,i)=>(
-      `<tr>
-        <td><input type="checkbox" class="sel" data-i="${i}"></td>
-        <td>${d.name}</td>
-        <td>${d.type}</td>
-        <td>${(d.text.length/1024).toFixed(1)} KB</td>
-        <td>${d.chunks.length}</td>
-      </tr>`)).join('');
-    docList.innerHTML =
+    const rows=store.map((d,i)=>(
+      `<tr><td><input type="checkbox" class="sel" data-i="${i}"></td>
+      <td>${d.name}</td><td>${d.type}</td>
+      <td>${(d.text.length/1024).toFixed(1)} KB</td><td>${d.chunks.length}</td></tr>`
+    )).join('');
+    $("#docList").innerHTML=
       `<table><thead><tr><th></th><th>名前</th><th>タイプ</th><th>サイズ</th><th>チャンク</th></tr></thead>
         <tbody>${rows||'<tr><td colspan="5" class="hint" style="padding:10px">未取り込み</td></tr>'}</tbody></table>`;
   }
-
-  function chunkText(txt, size){ const out=[]; for(let i=0;i<txt.length;i+=size){ out.push(txt.slice(i,i+size)); } return out; }
-
+  function chunkText(t,n){ const a=[]; for(let i=0;i<t.length;i+=n) a.push(t.slice(i,i+n)); return a; }
   async function parsePDF(file){
-    const arr = new Uint8Array(await file.arrayBuffer());
-    const pdf = await pdfjsLib.getDocument({data:arr}).promise;
-    let text=''; for(let p=1;p<=pdf.numPages;p++){
-      const page = await pdf.getPage(p);
-      const content = await page.getTextContent();
-      const pageText = content.items.map(it=>('str' in it)?it.str:'').join('');
-      text += `\n\n=== Page ${p} ===\n` + pageText;
-    }
-    return text;
+    const arr=new Uint8Array(await file.arrayBuffer());
+    const pdf=await pdfjs.getDocument({data:arr}).promise; let text='';
+    for(let p=1;p<=pdf.numPages;p++){ const page=await pdf.getPage(p);
+      const content=await page.getTextContent();
+      const pageText=content.items.map(it=>('str' in it)?it.str:'').join('');
+      text+=`\n\n=== Page ${p} ===\n`+pageText;
+    } return text;
   }
-
   async function handleFiles(files){
-    const size = parseInt(chunkCharsEl.value||'2000',10);
-    for(const file of files){
+    const size=parseInt($("#chunkChars").value||'2000',10);
+    for(const f of files){
       let text='';
-      if(looksTextFile(file.name)){ text = await file.text(); }
-      else if(/\.pdf$/i.test(file.name)){ pushMessage('system',`PDF抽出中: ${file.name}`); text = await parsePDF(file); }
-      else { pushMessage('system',`⚠ 非対応の拡張子: ${file.name}`); continue; }
-
-      const docId=uid();
-      const chunks=chunkText(text,size).map((t,idx)=>({id:uid(),text:t,docId,idx}));
-      store.push({id:docId,name:file.name,type:file.type||(/\.pdf$/i.test(file.name)?'application/pdf':'text/plain'),text, chunks});
-      pushMessage('system',`📂 取り込み: ${file.name}（${chunks.length} チャンク）`);
-    }
-    renderDocList();
+      if(looksTextFile(f.name)) text=await f.text();
+      else if(/\.pdf$/i.test(f.name)){ pushMessage('system',`PDF抽出中: ${f.name}`); text=await parsePDF(f); }
+      else { pushMessage('system',`⚠ 非対応の拡張子: ${f.name}`); continue; }
+      const docId=uid(); const chunks=chunkText(text,size).map((t,idx)=>({id:uid(),text:t,docId,idx}));
+      store.push({id:docId,name:f.name,type:f.type||(/\.pdf$/i.test(f.name)?'application/pdf':'text/plain'),text,chunks});
+      pushMessage('system',`📂 取り込み: ${f.name}（${chunks.length} チャンク）`);
+    } renderDocList();
   }
+  $("#fileInput").addEventListener('change',e=>{ if(e.target.files?.length) handleFiles(e.target.files); });
+  ;['dragenter','dragover'].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.add('drag');}));
+  ;['dragleave','drop'].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.remove('drag');}));
+  $("#drop").addEventListener('drop',e=>{ const files=[...(e.dataTransfer?.files||[])]; if(files.length) handleFiles(files); });
 
-  fileInput.addEventListener('change',e=>{ if(e.target.files?.length) handleFiles(e.target.files); });
-  ;['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag');}));
-  ;['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag');}));
-  drop.addEventListener('drop',e=>{ const files=[...(e.dataTransfer?.files||[])]; if(files.length) handleFiles(files); });
-
-  // ===== 索引（超軽量TF-IDF） =====
   function tokenize(s){ return s.toLowerCase().replace(/[^a-z0-9\u3040-\u30ff\u4e00-\u9fff]+/g,' ')
     .split(/\s+/).filter(t=>t && t.length>1); }
   function buildIndex(){
-    const df = new Map(); const docs=[]; const inv=new Map();
-    const allChunks = store.flatMap(d=>d.chunks);
-    allChunks.forEach((c,idx)=>{
-      const terms = new Map(); tokenize(c.text).forEach(t=>terms.set(t,(terms.get(t)||0)+1));
-      terms.forEach((tf,t)=>{ df.set(t,(df.get(t)||0)+1); });
-      docs.push({id:idx, terms, len: c.text.length});
-    });
-    df.forEach((_,t)=>inv.set(t,[]));
-    docs.forEach((d,chunkIdx)=>{
-      d.terms.forEach((tf,t)=>{ inv.get(t).push({docId:chunkIdx, tf}); });
-    });
-    index = {df,docs,inv,N:docs.length};
+    const df=new Map(), docs=[]; const inv=new Map(); const all=store.flatMap(d=>d.chunks);
+    all.forEach((c,idx)=>{ const terms=new Map(); tokenize(c.text).forEach(t=>terms.set(t,(terms.get(t)||0)+1));
+      terms.forEach((tf,t)=>df.set(t,(df.get(t)||0)+1)); docs.push({id:idx,terms,len:c.text.length}); });
+    df.forEach((_,t)=>inv.set(t,[])); docs.forEach((d,i)=>d.terms.forEach((tf,t)=>inv.get(t).push({docId:i,tf})));
+    index={df,docs,inv,N:docs.length};
   }
   function scoreQuery(q){
-    if(!index) return [];
-    const qterms = tokenize(q); const scores=new Map();
-    qterms.forEach(t=>{
-      const df=index.df.get(t)||0; if(!df) return;
-      const idf=Math.log((index.N+1)/(df+1))+1;
-      const postings=index.inv.get(t)||[];
-      postings.forEach(p=>{
-        const s=(scores.get(p.docId)||0)+p.tf*idf;
-        scores.set(p.docId,s);
+    if(!index) return []; const qterms=tokenize(q); const scores=new Map();
+    qterms.forEach(t=>{ const df=index.df.get(t)||0; if(!df) return;
+      const idf=Math.log((index.N+1)/(df+1))+1; (index.inv.get(t)||[]).forEach(p=>{
+        scores.set(p.docId,(scores.get(p.docId)||0)+p.tf*idf);
       });
     });
-    // 上位k
     return [...scores.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8).map(([i,sc])=>({idx:i,score:sc}));
   }
+  $("#reindex").addEventListener('click',()=>{ buildIndex(); pushMessage('system',`🔧 索引を再構築しました（${index?.N||0} チャンク）`); });
 
-  reindexBtn.addEventListener('click',()=>{ buildIndex(); pushMessage('system',`🔧 索引を再構築しました（${index?.N||0} チャンク）`); });
-
-  // ===== 要約（map-reduce） =====
-  async function summarizeChunks(chunks, title){
-    if(!engine) await loadModel();
-    // map: 各チャンク要約
-    const partial=[]; let n=0;
+  async function summarizeChunks(chunks,title){
+    if(!engine) await loadModel(); const partial=[]; let n=0;
     for(const ch of chunks){
-      const prompt =
-        `次のテキストを日本語で150〜250字に要約してください。\n---\n${ch.text}\n---`;
-      const res = await engine.chat.completions.create({
-        messages:[{role:'user',content:prompt}], stream:false,
-        temperature:0.3, max_tokens:512
-      });
-      const content = res?.choices?.[0]?.message?.content || '';
-      partial.push(`● ${content}`);
-      n++; if(n%3===0) pushMessage('system',`要約進行: ${n}/${chunks.length}`);
+      const prompt=`次のテキストを日本語で150〜250字に要約してください。\n---\n${ch.text}\n---`;
+      const res=await engine.chat.completions.create({ messages:[{role:'user',content:prompt}], stream:false, temperature:0.3, max_tokens:512 });
+      partial.push(`● ${(res?.choices?.[0]?.message?.content)||''}`); if(++n%3===0) pushMessage('system',`要約進行: ${n}/${chunks.length}`);
     }
-    // reduce: 統合要約
-    const reducePrompt =
-      `以下は複数断片の要約です。重複を除き、重要点・結論・数値・注意点を抽出して日本語で300〜500字にまとめてください。\n---\n${partial.join('\n')}\n---`;
-    const final = await engine.chat.completions.create({
-      messages:[{role:'user',content:reducePrompt}], stream:false,
-      temperature:0.3, max_tokens:512
-    });
-    const text = final?.choices?.[0]?.message?.content || '';
-    pushMessage('assistant', `【要約: ${title}】\n${text}`);
+    const reducePrompt=`以下の断片要約を統合し、重複を除いて重要点・結論・数値・注意点を日本語で300〜500字にまとめてください。\n---\n${partial.join('\n')}\n---`;
+    const final=await engine.chat.completions.create({ messages:[{role:'user',content:reducePrompt}], stream:false, temperature:0.3, max_tokens:512 });
+    pushMessage('assistant',`【要約: ${title}】\n${final?.choices?.[0]?.message?.content||''}`);
   }
+  $("#summAll").addEventListener('click',async()=>{ const chunks=store.flatMap(d=>d.chunks);
+    if(!chunks.length){ pushMessage('system','要約対象がありません'); return; } await summarizeChunks(chunks,'全ドキュメント'); });
+  $("#summSel").addEventListener('click',async()=>{ const picks=[...$("#docList").querySelectorAll('.sel')].filter(x=>x.checked);
+    if(!picks.length){ pushMessage('system','選択がありません'); return; }
+    const idx=picks.map(x=>parseInt(x.dataset.i,10)); const chunks=idx.flatMap(i=>store[i].chunks);
+    await summarizeChunks(chunks, idx.map(i=>store[i].name).join(', ')); });
 
-  summAllBtn.addEventListener('click',async ()=>{
-    const chunks = store.flatMap(d=>d.chunks);
-    if(!chunks.length){ pushMessage('system','要約対象がありません'); return; }
-    await summarizeChunks(chunks,'全ドキュメント');
-  });
-  summSelBtn.addEventListener('click',async ()=>{
-    const checks=[...docList.querySelectorAll('.sel')].filter(x=>x.checked);
-    if(!checks.length){ pushMessage('system','選択がありません'); return; }
-    const idx=checks.map(x=>parseInt(x.dataset.i,10));
-    const chunks = idx.flatMap(i=>store[i].chunks);
-    await summarizeChunks(chunks, idx.map(i=>store[i].name).join(', '));
-  });
-
-  // ===== RAG: 質問に関連チャンクを自動添付して質問 =====
-  askRagBtn.addEventListener('click', async ()=>{
-    const q = ragQuery.value.trim(); if(!q){ pushMessage('system','質問を入力してください'); return; }
-    if(!engine) await loadModel();
-    if(!index) buildIndex();
-    const hits = scoreQuery(q);
-    if(!hits.length){ pushMessage('system','索引にヒットしませんでした（先にドキュメントを取り込んで索引を再構築）'); return; }
-
-    const allChunks = store.flatMap(d=>d.chunks);
-    const context = hits.map((h,i)=>{
-      const c = allChunks[h.idx];
-      const name = (store.find(d=>d.id===c.docId)||{}).name || 'doc';
-      return `【#${i+1} ${name} / part ${c.idx+1}】\n${c.text}`;
-    }).join('\n\n');
-
-    const systemHint = "あなたは与えられた資料のみを根拠に日本語で答えます。未知の点は正直に「資料にはありません」と述べてください。";
-    pushMessage('user', `質問: ${q}\n\n参考コンテキスト（自動抽出）:\n${context.slice(0,8000)}`);
-
-    const chunks = await engine.chat.completions.create({
-      messages:[
-        {role:'system', content: systemHint},
-        {role:'user', content: `質問: ${q}\n\n次の資料を根拠に、要点/根拠出典番号つきで答えてください。\n資料:\n${context}`}
-      ],
+  $("#askRag").addEventListener('click', async ()=>{
+    const q=$("#ragQuery").value.trim(); if(!q){ pushMessage('system','質問を入力してください'); return; }
+    if(!engine) await loadModel(); if(!index) buildIndex();
+    const hits=scoreQuery(q); if(!hits.length){ pushMessage('system','索引にヒットしませんでした'); return; }
+    const all=store.flatMap(d=>d.chunks);
+    const ctx=hits.map((h,i)=>{ const c=all[h.idx]; const name=(store.find(d=>d.id===c.docId)||{}).name||'doc';
+      return `【#${i+1} ${name} / part ${c.idx+1}】\n${c.text}`; }).join('\n\n');
+    const systemHint="あなたは与えられた資料のみを根拠に日本語で答えます。未知は『資料にはありません』と述べてください。";
+    pushMessage('user', `質問: ${q}\n\n参考コンテキスト（自動抽出）:\n${ctx.slice(0,8000)}`);
+    const chunks=await engine.chat.completions.create({
+      messages:[{role:'system',content:systemHint},{role:'user',content:`質問: ${q}\n\n次の資料を根拠に、要点/根拠出典番号つきで答えてください。\n資料:\n${ctx}`}],
       stream:true, temperature:0.3, max_tokens:768
     });
-
-    let acc=''; pushMessage('assistant','');
-    const last=log.lastElementChild.querySelector('.bubble');
-    for await (const ch of chunks){
-      const d=ch?.choices?.[0]?.delta?.content ?? '';
-      if(d){ acc+=d; last.textContent=acc; }
-    }
-    chatHistory.push({role:'assistant', content:acc});
+    let acc=''; pushMessage('assistant',''); const last=log.lastElementChild.querySelector('.bubble');
+    for await (const ch of chunks){ const d=ch?.choices?.[0]?.delta?.content??''; if(d){acc+=d; last.textContent=acc;} }
+    chatHistory.push({role:'assistant',content:acc});
   });
 
-  // 初期描画
+  // 初期
   (function init(){ renderDocList(); })();
 </script>
 </body>
