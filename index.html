@@ -26,6 +26,7 @@
     #progress { height:6px; background:#1a1a1d; border-radius:3px; overflow:hidden; margin-top:8px; }
     #bar { height:100%; width:0%; background:var(--acc); transition: width .25s ease; }
     .hint { color:var(--muted); font-size:12px; }
+    .badge { display:inline-block; font-size:11px; padding:2px 6px; border:1px solid #2a2a2f; border-radius:8px; margin-left:6px; color:#cfe6ff; }
   </style>
 </head>
 <body>
@@ -55,11 +56,10 @@
       <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px;">
         <button id="send">送信</button>
       </div>
-      <div class="hint">初回はモデルのダウンロードがあります（IndexedDBにキャッシュされ、次回以降は高速）。</div>
+      <div class="hint">初回はモデルのダウンロードがあります（IndexedDBにキャッシュ。次回以降は高速）。</div>
     </div>
   </main>
 
-  <!-- ここからJS -->
   <script type="module">
     // GPU案内
     const gpuInfo = document.getElementById('gpu-info');
@@ -70,7 +70,7 @@
       navigator.serviceWorker.register('./sw.js').catch(console.warn);
     }
 
-    // WebLLM（バージョン固定＋公式モデル一覧を使用）
+    // WebLLM（バージョン固定＋公式モデル一覧）
     import { CreateMLCEngine, prebuiltAppConfig } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
     const appConfig = prebuiltAppConfig;
 
@@ -89,37 +89,77 @@
     const maxTokensEl = $("#maxTokens");
     const tempEl = $("#temp");
 
-    // 公開モデルからセレクトを自動生成
-    function buildModelMenu() {
-      // instruct/it かつ q4 系を優先し、軽い順に最大30件
+    // ---- ダウンロード済みモデルの推定ロジック ----
+    const LS_KEY = 'downloaded_models';
+    const getLocalDownloaded = () => new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]'));
+    const saveLocalDownloaded = (set) => localStorage.setItem(LS_KEY, JSON.stringify([...set]));
+
+    async function guessDownloadedByIndexedDB(candidateIds) {
+      const found = new Set();
+      try {
+        if (!('databases' in indexedDB)) return found; // 未対応ブラウザ
+        const dbs = await indexedDB.databases();      // [{name, version}, ...]
+        const names = (dbs || []).map(d => (d.name || '').toLowerCase());
+        for (const id of candidateIds) {
+          const key = id.toLowerCase();
+          if (names.some(n => n.includes(key))) found.add(id);
+        }
+      } catch { /* ブラウザ差吸収: 無視 */ }
+      return found;
+    }
+
+    // モデルメニュー生成（ダウンロード済みを上位表示）
+    async function buildModelMenu() {
+      const all = (appConfig.model_list || []).filter(m => m?.model_id);
       const prefer = m => /(-Instruct-|[-_.]it[-_.])/i.test(m.model_id) && /q4/i.test(m.model_id);
       const size = id => (id.match(/-(\d+)[bB]/)?.[1] ?? 9999) * 1;
-      const all = (appConfig.model_list || []).filter(m => m?.model_id);
-      const ordered = [
-        ...all.filter(prefer).sort((a,b)=> size(a.model_id)-size(b.model_id)),
-        ...all.filter(m=>!prefer(m)).sort((a,b)=> size(a.model_id)-size(b.model_id))
-      ];
-      const seen = new Set();
-      const pick = [];
-      for (const m of ordered) {
-        if (!seen.has(m.model_id)) { seen.add(m.model_id); pick.push(m); }
-        if (pick.length >= 30) break;
-      }
-      const pretty = id => id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1');
+
+      // 候補を軽い順で並べる
+      const sorted = [...all].sort((a,b)=> size(a.model_id) - size(b.model_id));
+
+      // ダウンロード済み推定
+      const local = getLocalDownloaded();
+      const idxdb = await guessDownloadedByIndexedDB(sorted.map(m=>m.model_id));
+      const downloaded = new Set([...local, ...idxdb]);
+
+      // 並び順: 1) ダウンロード済み, 2) instruct+q4, 3) その他
+      const keyRank = (id) => downloaded.has(id) ? 0 : 1;
+      const keyPref = (id) => prefer({model_id:id}) ? 0 : 1;
+
+      const ordered = [...sorted].sort((a,b)=>{
+        const r = keyRank(a.model_id) - keyRank(b.model_id);
+        if (r !== 0) return r;
+        const p = keyPref(a.model_id) - keyPref(b.model_id);
+        if (p !== 0) return p;
+        return size(a.model_id) - size(b.model_id);
+      });
+
+      // DOM反映（上限30件）
+      const pretty = id => {
+        const t = id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1');
+        return downloaded.has(id) ? `${t} ` : t;
+      };
       modelSel.innerHTML = '';
-      for (const m of pick) {
+      let count = 0;
+      for (const m of ordered) {
         const opt = document.createElement('option');
         opt.value = m.model_id;
         opt.textContent = pretty(m.model_id);
+        if (downloaded.has(m.model_id)) opt.textContent += '★'; // ダウンロード済み印
         modelSel.appendChild(opt);
+        if (++count >= 30) break;
       }
+
+      // 前回選択を復元
       const last = localStorage.getItem('model_id');
       if (last && [...modelSel.options].some(o=>o.value===last)) modelSel.value = last;
       if (!modelSel.value && modelSel.options.length) modelSel.selectedIndex = 0;
     }
-    buildModelMenu();
-    modelSel.addEventListener('change', ()=> localStorage.setItem('model_id', modelSel.value));
 
+    modelSel.addEventListener('change', ()=> localStorage.setItem('model_id', modelSel.value));
+    await buildModelMenu();
+
+    // ---- UIユーティリティ ----
     function pushMessage(role, text) {
       const row = document.createElement('div');
       row.className = `row ${role === 'user' ? 'me' : 'model'}`;
@@ -135,6 +175,7 @@
       if (p >= 1) setTimeout(()=>{ progress.hidden = true; bar.style.width='0%'; }, 400);
     }
 
+    // ---- モデル読み込み ----
     async function loadModel() {
       const modelId = modelSel.value;
       setProgress(0.01);
@@ -148,6 +189,12 @@
           }
         });
         pushMessage('system', `準備完了: ${modelId}`);
+
+        // 成功したモデルを「ダウンロード済み」として記録 → 次回上位へ
+        const set = getLocalDownloaded();
+        set.add(modelId);
+        saveLocalDownloaded(set);
+        await buildModelMenu();
       } catch (e) {
         console.error(e);
         pushMessage('system', `読み込みエラー: ${String(e?.message || e)}`);
@@ -155,6 +202,7 @@
       }
     }
 
+    // ---- 送信処理 ----
     loadBtn.addEventListener('click', async () => {
       loadBtn.disabled = true;
       try { await loadModel(); } finally { loadBtn.disabled = false; }
