@@ -1,271 +1,396 @@
-
-
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Browser LLM Chat</title>
-  <style>
-    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#0b0b0c; color:#f1f1f3; }
-    header { background:#111; padding:14px 20px; border-bottom:1px solid #222; display:flex; justify-content:space-between; align-items:center;}
-    main { max-width:980px; margin:0 auto; padding:20px; }
-    select, input, button, textarea {
-      background:#161618; color:#f1f1f3; border:1px solid #2a2a2f; border-radius:10px; padding:10px; font-size:14px;
-    }
-    textarea { width:100%; min-height:80px; resize:vertical; }
-    .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; }
-    .input-group { display:flex; flex-direction:column; min-width:260px; }
-    .row { display:flex; gap:10px; margin-top:10px; }
-    .role { width:84px; color:#aaa; font-size:12px; text-transform:uppercase; }
-    .bubble { background:#131316; border:1px solid #2a2a2f; border-radius:14px; padding:10px 14px; flex:1; white-space:pre-wrap; }
-    #progress { height:6px; background:#1a1a1d; border-radius:3px; overflow:hidden; margin:8px 0; }
-    #bar { height:100%; width:0%; background:#4da3ff; transition:width .25s ease; }
-    .hint { color:#9aa0a6; font-size:12px; }
-    .small { font-size:12px; padding:6px 8px; border-radius:8px; }
-    optgroup[label] { color:#b6c8ff; font-weight:600; font-style:normal; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Browser LLM Chat + PDF & RAG</title>
+<style>
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#0b0b0c;color:#f1f1f3}
+  header{background:#111;padding:14px 20px;border-bottom:1px solid #222;display:flex;justify-content:space-between;align-items:center}
+  main{max-width:1100px;margin:0 auto;padding:18px}
+  select,input,button,textarea{background:#161618;color:#f1f1f3;border:1px solid #2a2a2f;border-radius:10px;padding:10px;font-size:14px}
+  textarea{width:100%;min-height:80px;resize:vertical}
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}
+  .input-group{display:flex;flex-direction:column;min-width:260px}
+  .row{display:flex;gap:10px;margin-top:10px}
+  .role{width:84px;color:#aaa;font-size:12px;text-transform:uppercase}
+  .bubble{background:#131316;border:1px solid #2a2a2f;border-radius:14px;padding:10px 14px;flex:1;white-space:pre-wrap}
+  #progress{height:6px;background:#1a1a1d;border-radius:3px;overflow:hidden;margin:8px 0}
+  #bar{height:100%;width:0%;background:#4da3ff;transition:width .25s ease}
+  .hint{color:#9aa0a6;font-size:12px}
+  .small{font-size:12px;padding:6px 8px;border-radius:8px}
+  optgroup[label]{color:#b6c8ff;font-weight:600;font-style:normal}
+  .panel{border:1px solid #2a2a2f;border-radius:12px;padding:12px;background:#121214}
+  .list{max-height:220px;overflow:auto;border:1px solid #2a2a2f;border-radius:10px;margin-top:8px}
+  .list table{width:100%;border-collapse:collapse}
+  .list th,.list td{padding:6px 8px;border-bottom:1px solid #24242a;font-size:13px}
+  .dropzone{border:1px dashed #2a2a2f;border-radius:12px;padding:12px;background:#121214;color:#cfd3da;text-align:center}
+  .dropzone.drag{background:#172033;border-color:#355a9a}
+</style>
 </head>
 <body>
-  <header>
-    <div><b>Browser LLM Chat</b> <span class="hint">（WebGPUでローカル推論）</span></div>
-    <div id="gpu" class="hint">GPU: 検出中…</div>
-  </header>
+<header>
+  <div><b>Browser LLM Chat</b> <span class="hint">（WebGPUでローカル推論＋PDF抽出＋RAG）</span></div>
+  <div id="gpu" class="hint">GPU: 検出中…</div>
+</header>
 
-  <main>
-    <div class="toolbar">
+<main>
+  <!-- ====== LLM 操作バー ====== -->
+  <div class="toolbar">
+    <div class="input-group" style="min-width:360px;">
+      <label>モデル<select id="model"></select></label>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+        <label class="hint"><input type="checkbox" id="onlyDownloaded"> ダウンロード済みのみ表示</label>
+        <button id="refresh" class="small">再スキャン</button>
+        <span class="hint">★=ダウンロード済み / 7Bまで自動抽出</span>
+      </div>
+    </div>
+    <div class="input-group">
+      <label>最大トークン<input type="number" id="maxTokens" value="512" min="32" max="4096" step="32"></label>
+      <select id="maxPreset" class="small">
+        <option value="">▼ プリセット</option>
+        <option value="32">32（短文）</option><option value="64">64（簡潔）</option>
+        <option value="256">256（説明）</option><option value="1024">1024（長文）</option>
+        <option value="2048">2048（物語）</option>
+      </select>
+    </div>
+    <div class="input-group">
+      <label>温度<input type="number" id="temp" value="0.7" min="0" max="1.5" step="0.1"></label>
+      <select id="tempPreset" class="small">
+        <option value="">▼ 用途を選択</option>
+        <option value="0.2">論理問題</option><option value="0.3">要約</option>
+        <option value="0.4">翻訳</option><option value="0.7">普通の会話・説明文</option>
+        <option value="0.9">詩・物語</option><option value="1.1">アイデア生成</option>
+        <option value="1.5">実験的</option>
+      </select>
+    </div>
+    <div class="input-group" style="min-width:220px;">
+      <button id="load">モデル読み込み</button>
+      <button id="clear">履歴クリア</button>
+    </div>
+  </div>
+
+  <!-- ====== ファイル読み込み + PDF抽出 ====== -->
+  <div class="panel" style="margin-top:12px;">
+    <b>📂 ドキュメント</b> <span class="hint">（TXT/MD/JSON/CSV/LOG/HTML/XML/YAML/PDF）</span>
+    <div class="toolbar" style="margin-top:8px;">
       <div class="input-group" style="min-width:360px;">
-        <label>モデル
-          <select id="model"></select>
+        <label>ファイル選択
+          <input type="file" id="fileInput" multiple
+                 accept=".txt,.md,.markdown,.json,.csv,.log,.html,.xml,.yaml,.yml,.pdf" />
         </label>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px;">
-          <label class="hint"><input type="checkbox" id="onlyDownloaded"> ダウンロード済みのみ表示</label>
-          <button id="refresh" class="small">再スキャン</button>
-          <span class="hint">★=ダウンロード済み / 7Bまで自動抽出</span>
+        <div id="drop" class="dropzone">ここにドラッグ＆ドロップでもOK</div>
+      </div>
+      <div class="input-group">
+        <label>チャンク上限（文字）
+          <input type="number" id="chunkChars" value="2000" min="500" max="20000" step="500">
+        </label>
+        <span class="hint">※ 1チャンク＝この長さで分割。日本語はおおよそ2文字=1トークン。</span>
+      </div>
+      <div class="input-group" style="min-width:280px;">
+        <label>操作</label>
+        <div class="toolbar">
+          <button id="reindex" class="small">索引を再構築</button>
+          <button id="summAll" class="small">全部要約（map-reduce）</button>
+          <button id="summSel" class="small">選択要約</button>
         </div>
-      </div>
-
-      <div class="input-group">
-        <label>最大トークン
-          <input type="number" id="maxTokens" value="512" min="32" max="4096" step="32">
-        </label>
-        <select id="maxPreset" class="small">
-          <option value="">▼ プリセット</option>
-          <option value="32">32（短文）</option>
-          <option value="64">64（簡潔）</option>
-          <option value="256">256（数行の説明）</option>
-          <option value="1024">1024（長文）</option>
-          <option value="2048">2048（物語級）</option>
-        </select>
-      </div>
-
-      <div class="input-group">
-        <label>温度
-          <input type="number" id="temp" value="0.7" min="0" max="1.5" step="0.1">
-        </label>
-        <select id="tempPreset" class="small">
-          <option value="">▼ 用途を選択</option>
-          <option value="0.2">論理問題</option>
-          <option value="0.3">要約</option>
-          <option value="0.4">翻訳</option>
-          <option value="0.7">普通の会話・説明文</option>
-          <option value="0.9">詩・物語</option>
-          <option value="1.1">アイデア生成</option>
-          <option value="1.5">実験的にのみ推奨</option>
-        </select>
-      </div>
-
-      <div class="input-group" style="min-width:220px;">
-        <button id="load">モデル読み込み</button>
-        <button id="clear">履歴クリア</button>
       </div>
     </div>
 
-    <div id="progress" hidden><div id="bar"></div></div>
-    <div id="log"></div>
+    <div class="list" id="docList"></div>
 
-    <textarea id="input" placeholder="メッセージを入力して Enter"></textarea>
-    <button id="send" style="margin-top:8px;">送信</button>
-  </main>
+    <div class="toolbar" style="margin-top:10px;">
+      <div class="input-group" style="min-width:680px;">
+        <label>🔎 ドキュメントに質問（RAG）</label>
+        <input id="ragQuery" placeholder="例：この資料の結論を日本語で要約して" />
+      </div>
+      <button id="askRag">質問する（関連コンテキスト自動添付）</button>
+    </div>
+  </div>
 
-  <script type="module">
-    import { CreateMLCEngine, prebuiltAppConfig } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
-    const appConfig = prebuiltAppConfig;
+  <!-- ====== チャット ====== -->
+  <div id="progress" hidden><div id="bar"></div></div>
+  <div id="log"></div>
+  <textarea id="input" placeholder="通常のチャットはこちら。Enterで送信"></textarea>
+  <button id="send" style="margin-top:8px;">送信</button>
+</main>
 
-    const $ = s => document.querySelector(s);
-    const gpu = $("#gpu");
-    const modelSel = $("#model");
-    const onlyDownloaded = $("#onlyDownloaded");
-    const refreshBtn = $("#refresh");
-    const maxTokensEl = $("#maxTokens");
-    const tempEl = $("#temp");
-    const maxPreset = $("#maxPreset");
-    const tempPreset = $("#tempPreset");
-    const loadBtn = $("#load");
-    const clearBtn = $("#clear");
-    const sendBtn = $("#send");
-    const input = $("#input");
-    const log = $("#log");
-    const progress = $("#progress");
-    const bar = $("#bar");
+<script type="module">
+  // ===== 依存：WebLLM と pdf.js（ES Module） =====
+  import { CreateMLCEngine, prebuiltAppConfig } from "https://esm.run/@mlc-ai/web-llm@0.2.63";
+  import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.mjs";
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
 
-    gpu.textContent = navigator.gpu ? "GPU: WebGPU 利用可能" : "GPU: WebGPU 非対応";
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
+  const appConfig = prebuiltAppConfig;
 
-    // ---- 7Bまで抽出 & ダウンロード済み検出 ----
-    function human(id){ return id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1'); }
-    function sizeB(id){
-      const m = id.match(/-(\d+(?:\.\d+)?)\s*[bB]/);  // "-7B", "-3.1B" など
-      return m ? parseFloat(m[1]) : null;
+  // ===== DOM =====
+  const $ = s => document.querySelector(s);
+  const gpu=$("#gpu"), modelSel=$("#model"), onlyDownloaded=$("#onlyDownloaded"),
+        refreshBtn=$("#refresh"), maxTokensEl=$("#maxTokens"), tempEl=$("#temp"),
+        maxPreset=$("#maxPreset"), tempPreset=$("#tempPreset"), loadBtn=$("#load"),
+        clearBtn=$("#clear"), sendBtn=$("#send"), input=$("#input"),
+        progress=$("#progress"), bar=$("#bar"), log=$("#log");
+  const fileInput=$("#fileInput"), drop=$("#drop"), chunkCharsEl=$("#chunkChars"),
+        docList=$("#docList"), reindexBtn=$("#reindex"),
+        summAllBtn=$("#summAll"), summSelBtn=$("#summSel"),
+        ragQuery=$("#ragQuery"), askRagBtn=$("#askRag");
+
+  gpu.textContent = navigator.gpu ? "GPU: WebGPU 利用可能" : "GPU: WebGPU 非対応";
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
+
+  // ===== モデル選択（7Bまで + ★上位） =====
+  function human(id){ return id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1'); }
+  function sizeB(id){ const m = id.match(/-(\d+(?:\.\d+)?)\s*[bB]/); return m?parseFloat(m[1]):null; }
+  const LS_KEY='downloaded_models';
+  const getLocalDownloaded=()=>new Set(JSON.parse(localStorage.getItem(LS_KEY)||'[]'));
+  const saveLocalDownloaded=set=>localStorage.setItem(LS_KEY,JSON.stringify([...set]));
+  async function guessDownloadedByIndexedDB(ids){
+    const found=new Set();
+    try{
+      if(!('databases' in indexedDB)) return found;
+      const dbs=await indexedDB.databases(); const names=(dbs||[]).map(d=>(d.name||'').toLowerCase());
+      for(const id of ids){ const key=id.toLowerCase(); if(names.some(n=>n.includes(key))) found.add(id); }
+    }catch{} return found;
+  }
+  async function rebuildMenu(){
+    const all=(appConfig.model_list||[]).map(m=>m?.model_id).filter(Boolean)
+      .filter(id=>{const s=sizeB(id); return (s==null||s<=7.01); });
+    const isPref=id=>/(-Instruct-|[-_.]it[-_.])/i.test(id)&&/q4/i.test(id);
+    const orderBySize=(a,b)=>(sizeB(a)??99)-(sizeB(b)??99);
+
+    const local=getLocalDownloaded(), idxdb=await guessDownloadedByIndexedDB(all);
+    const downloaded=new Set([...local,...idxdb]);
+
+    const ordered=[...all].sort((a,b)=>{
+      const r=(downloaded.has(a)?0:1)-(downloaded.has(b)?0:1); if(r!==0) return r;
+      const p=(isPref(a)?0:1)-(isPref(b)?0:1); if(p!==0) return p;
+      return orderBySize(a,b);
+    });
+
+    modelSel.innerHTML='';
+    const ogDL=document.createElement('optgroup'); ogDL.label='★ ダウンロード済み（7Bまで）';
+    const ogAll=document.createElement('optgroup'); ogAll.label='すべて（7Bまで）';
+    for(const id of ordered){
+      const opt=document.createElement('option');
+      opt.value=id; opt.textContent=downloaded.has(id)?`${human(id)} ★`:human(id);
+      (downloaded.has(id)?ogDL:ogAll).appendChild(opt);
     }
-    const LS_KEY = 'downloaded_models';
-    const getLocalDownloaded = () => new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]'));
-    const saveLocalDownloaded = set => localStorage.setItem(LS_KEY, JSON.stringify([...set]));
-    async function guessDownloadedByIndexedDB(candidateIds){
-      const found = new Set();
-      try{
-        if (!('databases' in indexedDB)) return found;
-        const dbs = await indexedDB.databases();
-        const names = (dbs||[]).map(d => (d.name||'').toLowerCase());
-        for (const id of candidateIds){
-          const key = id.toLowerCase();
-          if (names.some(n => n.includes(key))) found.add(id);
-        }
-      }catch{}
-      return found;
+    if(onlyDownloaded.checked) modelSel.appendChild(ogDL);
+    else { modelSel.appendChild(ogDL); modelSel.appendChild(ogAll); }
+
+    const last=localStorage.getItem('model_id');
+    if(last&&[...modelSel.options].some(o=>o.value===last)) modelSel.value=last;
+    if(!modelSel.value&&modelSel.options.length) modelSel.selectedIndex=0;
+  }
+  onlyDownloaded.addEventListener('change',rebuildMenu);
+  refreshBtn.addEventListener('click',rebuildMenu);
+  await rebuildMenu();
+
+  // ===== LLM エンジン =====
+  let engine=null, chatHistory=[];
+  function pushMessage(role,text){ const row=document.createElement('div'); row.className='row';
+    row.innerHTML=`<div class="role">${role}</div><div class="bubble"></div>`;
+    row.querySelector('.bubble').textContent=text; log.appendChild(row);
+    row.scrollIntoView({behavior:'smooth',block:'end'}); }
+  function setProgress(p){ progress.hidden=false; bar.style.width=`${Math.round(p*100)}%`;
+    if(p>=1) setTimeout(()=>{progress.hidden=true;bar.style.width='0%';},400); }
+  async function loadModel(){
+    const id=modelSel.value; setProgress(0.01); pushMessage('system',`モデル読み込み中: ${id}`);
+    try{
+      engine=await CreateMLCEngine(id,{appConfig,initProgressCallback:r=>{if(r.progress!=null)setProgress(r.progress);}});
+      pushMessage('system',`準備完了: ${id}`);
+      const set=getLocalDownloaded(); set.add(id); saveLocalDownloaded(set);
+      localStorage.setItem('model_id',id); await rebuildMenu();
+    }catch(e){ console.error(e); pushMessage('system',`読み込みエラー: ${String(e?.message||e)}`); throw e; }
+  }
+  async function send(){
+    const text=input.value.trim(); if(!text) return; if(!engine) await loadModel();
+    input.value=''; pushMessage('user',text); chatHistory.push({role:'user',content:text});
+    const chunks=await engine.chat.completions.create({
+      messages:chatHistory, stream:true,
+      temperature:parseFloat(tempEl.value), max_tokens:parseInt(maxTokensEl.value,10),
+    });
+    let acc=''; pushMessage('assistant',''); const last=log.lastElementChild.querySelector('.bubble');
+    for await (const ch of chunks){ const d=ch?.choices?.[0]?.delta?.content??''; if(d){acc+=d; last.textContent=acc;} }
+    chatHistory.push({role:'assistant',content:acc});
+  }
+  loadBtn.addEventListener('click',loadModel);
+  clearBtn.addEventListener('click',()=>{chatHistory=[];log.innerHTML='';});
+  sendBtn.addEventListener('click',send);
+  input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+
+  maxPreset.addEventListener('change',e=>{if(e.target.value)maxTokensEl.value=e.target.value;e.target.selectedIndex=0;});
+  tempPreset.addEventListener('change',e=>{if(e.target.value)tempEl.value=e.target.value;e.target.selectedIndex=0;});
+
+  // ===== ドキュメント管理（PDF抽出 + チャンク化 + 索引） =====
+  const store = []; // {id,name,type,text,chunks:[{id,text,docId,idx}]}
+  let index = null; // {df:Map, docs:[{id,terms:Map,len}], inv:Map(term -> [{docId,chunkIdx,tf}])}
+
+  function looksTextFile(name){ return /\.(txt|md|markdown|json|csv|log|html?|xml|ya?ml)$/i.test(name); }
+  function uid(){ return Math.random().toString(36).slice(2); }
+
+  function renderDocList(){
+    const rows = store.map((d,i)=>(
+      `<tr>
+        <td><input type="checkbox" class="sel" data-i="${i}"></td>
+        <td>${d.name}</td>
+        <td>${d.type}</td>
+        <td>${(d.text.length/1024).toFixed(1)} KB</td>
+        <td>${d.chunks.length}</td>
+      </tr>`)).join('');
+    docList.innerHTML =
+      `<table><thead><tr><th></th><th>名前</th><th>タイプ</th><th>サイズ</th><th>チャンク</th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="5" class="hint" style="padding:10px">未取り込み</td></tr>'}</tbody></table>`;
+  }
+
+  function chunkText(txt, size){ const out=[]; for(let i=0;i<txt.length;i+=size){ out.push(txt.slice(i,i+size)); } return out; }
+
+  async function parsePDF(file){
+    const arr = new Uint8Array(await file.arrayBuffer());
+    const pdf = await pdfjsLib.getDocument({data:arr}).promise;
+    let text=''; for(let p=1;p<=pdf.numPages;p++){
+      const page = await pdf.getPage(p);
+      const content = await page.getTextContent();
+      const pageText = content.items.map(it=>('str' in it)?it.str:'').join('');
+      text += `\n\n=== Page ${p} ===\n` + pageText;
     }
+    return text;
+  }
 
-    async function rebuildMenu(){
-      // 公式一覧→7B以下を抽出（サイズ不明は一旦候補に含める）
-      const all = (appConfig.model_list||[])
-        .map(m => m?.model_id).filter(Boolean)
-        .filter(id => {
-          const s = sizeB(id);
-          return (s == null || s <= 7.01); // 7Bまで
-        });
+  async function handleFiles(files){
+    const size = parseInt(chunkCharsEl.value||'2000',10);
+    for(const file of files){
+      let text='';
+      if(looksTextFile(file.name)){ text = await file.text(); }
+      else if(/\.pdf$/i.test(file.name)){ pushMessage('system',`PDF抽出中: ${file.name}`); text = await parsePDF(file); }
+      else { pushMessage('system',`⚠ 非対応の拡張子: ${file.name}`); continue; }
 
-      // instruct/it を優先
-      const isPref = id => /(-Instruct-|[-_.]it[-_.])/i.test(id) && /q4/i.test(id);
-      const orderBySize = (a,b) => {
-        const sa = sizeB(a) ?? 99, sb = sizeB(b) ?? 99;
-        return sa - sb;
-      };
+      const docId=uid();
+      const chunks=chunkText(text,size).map((t,idx)=>({id:uid(),text:t,docId,idx}));
+      store.push({id:docId,name:file.name,type:file.type||(/\.pdf$/i.test(file.name)?'application/pdf':'text/plain'),text, chunks});
+      pushMessage('system',`📂 取り込み: ${file.name}（${chunks.length} チャンク）`);
+    }
+    renderDocList();
+  }
 
-      // ダウンロード済み推定
-      const local = getLocalDownloaded();
-      const idxdb = await guessDownloadedByIndexedDB(all);
-      const downloaded = new Set([...local, ...idxdb]);
+  fileInput.addEventListener('change',e=>{ if(e.target.files?.length) handleFiles(e.target.files); });
+  ;['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag');}));
+  ;['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag');}));
+  drop.addEventListener('drop',e=>{ const files=[...(e.dataTransfer?.files||[])]; if(files.length) handleFiles(files); });
 
-      const ordered = [...all].sort((a,b)=>{
-        const r = (downloaded.has(a)?0:1) - (downloaded.has(b)?0:1);
-        if (r !== 0) return r;
-        const p = (isPref(a)?0:1) - (isPref(b)?0:1);
-        if (p !== 0) return p;
-        return orderBySize(a,b);
+  // ===== 索引（超軽量TF-IDF） =====
+  function tokenize(s){ return s.toLowerCase().replace(/[^a-z0-9\u3040-\u30ff\u4e00-\u9fff]+/g,' ')
+    .split(/\s+/).filter(t=>t && t.length>1); }
+  function buildIndex(){
+    const df = new Map(); const docs=[]; const inv=new Map();
+    const allChunks = store.flatMap(d=>d.chunks);
+    allChunks.forEach((c,idx)=>{
+      const terms = new Map(); tokenize(c.text).forEach(t=>terms.set(t,(terms.get(t)||0)+1));
+      terms.forEach((tf,t)=>{ df.set(t,(df.get(t)||0)+1); });
+      docs.push({id:idx, terms, len: c.text.length});
+    });
+    df.forEach((_,t)=>inv.set(t,[]));
+    docs.forEach((d,chunkIdx)=>{
+      d.terms.forEach((tf,t)=>{ inv.get(t).push({docId:chunkIdx, tf}); });
+    });
+    index = {df,docs,inv,N:docs.length};
+  }
+  function scoreQuery(q){
+    if(!index) return [];
+    const qterms = tokenize(q); const scores=new Map();
+    qterms.forEach(t=>{
+      const df=index.df.get(t)||0; if(!df) return;
+      const idf=Math.log((index.N+1)/(df+1))+1;
+      const postings=index.inv.get(t)||[];
+      postings.forEach(p=>{
+        const s=(scores.get(p.docId)||0)+p.tf*idf;
+        scores.set(p.docId,s);
       });
+    });
+    // 上位k
+    return [...scores.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8).map(([i,sc])=>({idx:i,score:sc}));
+  }
 
-      // DOM
-      modelSel.innerHTML = '';
-      const ogDL = document.createElement('optgroup'); ogDL.label = '★ ダウンロード済み（7Bまで）';
-      const ogAll = document.createElement('optgroup'); ogAll.label = 'すべて（7Bまで）';
+  reindexBtn.addEventListener('click',()=>{ buildIndex(); pushMessage('system',`🔧 索引を再構築しました（${index?.N||0} チャンク）`); });
 
-      for (const id of ordered){
-        const opt = document.createElement('option');
-        opt.value = id;
-        opt.textContent = downloaded.has(id) ? `${human(id)} ★` : human(id);
-        (downloaded.has(id) ? ogDL : ogAll).appendChild(opt);
-      }
-
-      if (onlyDownloaded.checked) {
-        modelSel.appendChild(ogDL);
-      } else {
-        modelSel.appendChild(ogDL);
-        modelSel.appendChild(ogAll);
-      }
-
-      const last = localStorage.getItem('model_id');
-      if (last && [...modelSel.options].some(o=>o.value===last)) modelSel.value = last;
-      if (!modelSel.value && modelSel.options.length) modelSel.selectedIndex = 0;
-    }
-
-    onlyDownloaded.addEventListener('change', rebuildMenu);
-    refreshBtn.addEventListener('click', rebuildMenu);
-    await rebuildMenu();
-
-    // ---- プリセット反映 ----
-    maxPreset.addEventListener('change', e => { if (e.target.value) maxTokensEl.value = e.target.value; e.target.selectedIndex=0; });
-    tempPreset.addEventListener('change', e => { if (e.target.value) tempEl.value = e.target.value; e.target.selectedIndex=0; });
-
-    // ---- チャット処理 ----
-    let engine = null;
-    let chatHistory = [];
-
-    function pushMessage(role, text) {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.innerHTML = `<div class="role">${role}</div><div class="bubble"></div>`;
-      row.querySelector('.bubble').textContent = text;
-      log.appendChild(row);
-      row.scrollIntoView({ behavior:'smooth', block:'end' });
-    }
-    function setProgress(p){
-      progress.hidden = false;
-      bar.style.width = `${Math.round(p*100)}%`;
-      if (p>=1) setTimeout(()=>{ progress.hidden=true; bar.style.width='0%'; }, 400);
-    }
-
-    async function loadModel() {
-      const modelId = modelSel.value;
-      setProgress(0.01);
-      pushMessage('system', `モデル読み込み中: ${modelId}`);
-      try{
-        engine = await CreateMLCEngine(modelId, {
-          appConfig,
-          initProgressCallback: r => { if (r.progress != null) setProgress(r.progress); }
-        });
-        pushMessage('system', `準備完了: ${modelId}`);
-        // 記録→次回は★で上位表示
-        const set = getLocalDownloaded(); set.add(modelId); saveLocalDownloaded(set);
-        localStorage.setItem('model_id', modelId);
-        await rebuildMenu();
-      }catch(e){
-        console.error(e);
-        pushMessage('system', `読み込みエラー: ${String(e?.message||e)}`);
-        throw e;
-      }
-    }
-
-    async function send() {
-      const text = input.value.trim();
-      if (!text) return;
-      if (!engine) await loadModel();
-
-      input.value = '';
-      pushMessage('user', text);
-      chatHistory.push({ role:'user', content:text });
-
-      const chunks = await engine.chat.completions.create({
-        messages: chatHistory,
-        stream: true,
-        temperature: parseFloat(tempEl.value),
-        max_tokens: parseInt(maxTokensEl.value,10),
+  // ===== 要約（map-reduce） =====
+  async function summarizeChunks(chunks, title){
+    if(!engine) await loadModel();
+    // map: 各チャンク要約
+    const partial=[]; let n=0;
+    for(const ch of chunks){
+      const prompt =
+        `次のテキストを日本語で150〜250字に要約してください。\n---\n${ch.text}\n---`;
+      const res = await engine.chat.completions.create({
+        messages:[{role:'user',content:prompt}], stream:false,
+        temperature:0.3, max_tokens:512
       });
-
-      let acc = '';
-      pushMessage('assistant','');
-      const last = log.lastElementChild.querySelector('.bubble');
-
-      for await (const ch of chunks){
-        const delta = ch?.choices?.[0]?.delta?.content ?? '';
-        if (delta){ acc += delta; last.textContent = acc; }
-      }
-      chatHistory.push({ role:'assistant', content:acc });
+      const content = res?.choices?.[0]?.message?.content || '';
+      partial.push(`● ${content}`);
+      n++; if(n%3===0) pushMessage('system',`要約進行: ${n}/${chunks.length}`);
     }
+    // reduce: 統合要約
+    const reducePrompt =
+      `以下は複数断片の要約です。重複を除き、重要点・結論・数値・注意点を抽出して日本語で300〜500字にまとめてください。\n---\n${partial.join('\n')}\n---`;
+    const final = await engine.chat.completions.create({
+      messages:[{role:'user',content:reducePrompt}], stream:false,
+      temperature:0.3, max_tokens:512
+    });
+    const text = final?.choices?.[0]?.message?.content || '';
+    pushMessage('assistant', `【要約: ${title}】\n${text}`);
+  }
 
-    document.getElementById('load').addEventListener('click', loadModel);
-    document.getElementById('clear').addEventListener('click', ()=>{ chatHistory=[]; log.innerHTML=''; });
-    document.getElementById('send').addEventListener('click', send);
-    input.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }});
-  </script>
+  summAllBtn.addEventListener('click',async ()=>{
+    const chunks = store.flatMap(d=>d.chunks);
+    if(!chunks.length){ pushMessage('system','要約対象がありません'); return; }
+    await summarizeChunks(chunks,'全ドキュメント');
+  });
+  summSelBtn.addEventListener('click',async ()=>{
+    const checks=[...docList.querySelectorAll('.sel')].filter(x=>x.checked);
+    if(!checks.length){ pushMessage('system','選択がありません'); return; }
+    const idx=checks.map(x=>parseInt(x.dataset.i,10));
+    const chunks = idx.flatMap(i=>store[i].chunks);
+    await summarizeChunks(chunks, idx.map(i=>store[i].name).join(', '));
+  });
+
+  // ===== RAG: 質問に関連チャンクを自動添付して質問 =====
+  askRagBtn.addEventListener('click', async ()=>{
+    const q = ragQuery.value.trim(); if(!q){ pushMessage('system','質問を入力してください'); return; }
+    if(!engine) await loadModel();
+    if(!index) buildIndex();
+    const hits = scoreQuery(q);
+    if(!hits.length){ pushMessage('system','索引にヒットしませんでした（先にドキュメントを取り込んで索引を再構築）'); return; }
+
+    const allChunks = store.flatMap(d=>d.chunks);
+    const context = hits.map((h,i)=>{
+      const c = allChunks[h.idx];
+      const name = (store.find(d=>d.id===c.docId)||{}).name || 'doc';
+      return `【#${i+1} ${name} / part ${c.idx+1}】\n${c.text}`;
+    }).join('\n\n');
+
+    const systemHint = "あなたは与えられた資料のみを根拠に日本語で答えます。未知の点は正直に「資料にはありません」と述べてください。";
+    pushMessage('user', `質問: ${q}\n\n参考コンテキスト（自動抽出）:\n${context.slice(0,8000)}`);
+
+    const chunks = await engine.chat.completions.create({
+      messages:[
+        {role:'system', content: systemHint},
+        {role:'user', content: `質問: ${q}\n\n次の資料を根拠に、要点/根拠出典番号つきで答えてください。\n資料:\n${context}`}
+      ],
+      stream:true, temperature:0.3, max_tokens:768
+    });
+
+    let acc=''; pushMessage('assistant','');
+    const last=log.lastElementChild.querySelector('.bubble');
+    for await (const ch of chunks){
+      const d=ch?.choices?.[0]?.delta?.content ?? '';
+      if(d){ acc+=d; last.textContent=acc; }
+    }
+    chatHistory.push({role:'assistant', content:acc});
+  });
+
+  // 初期描画
+  (function init(){ renderDocList(); })();
+</script>
 </body>
 </html>
