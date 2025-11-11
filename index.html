@@ -1,3 +1,6 @@
+# index.html
+
+```html
 <!doctype html>
 <html lang="ja">
 <head>
@@ -5,23 +8,24 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Browser LLM Chat</title>
   <style>
-    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#0b0b0c; color:#f1f1f3; }
-    header { background:#111; padding:14px 20px; border-bottom:1px solid #222; display:flex; justify-content:space-between; align-items:center;}
+    :root { --bg:#0b0b0c; --panel:#111; --border:#222; --ink:#f1f1f3; --muted:#9aa0a6; --chip:#2a2a2f; --bubble:#131316; --accent:#4da3ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+    header { background:var(--panel); padding:14px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;}
     main { max-width:980px; margin:0 auto; padding:20px; }
-    select, input, button, textarea {
-      background:#161618; color:#f1f1f3; border:1px solid #2a2a2f; border-radius:10px; padding:10px; font-size:14px;
-    }
+    select, input, button, textarea { background:#161618; color:var(--ink); border:1px solid var(--chip); border-radius:10px; padding:10px; font-size:14px; }
     textarea { width:100%; min-height:80px; resize:vertical; }
     .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; }
     .input-group { display:flex; flex-direction:column; min-width:260px; }
     .row { display:flex; gap:10px; margin-top:10px; }
     .role { width:84px; color:#aaa; font-size:12px; text-transform:uppercase; }
-    .bubble { background:#131316; border:1px solid #2a2a2f; border-radius:14px; padding:10px 14px; flex:1; white-space:pre-wrap; }
+    .bubble { background:var(--bubble); border:1px solid var(--chip); border-radius:14px; padding:10px 14px; flex:1; white-space:pre-wrap; }
     #progress { height:6px; background:#1a1a1d; border-radius:3px; overflow:hidden; margin:8px 0; }
-    #bar { height:100%; width:0%; background:#4da3ff; transition:width .25s ease; }
-    .hint { color:#9aa0a6; font-size:12px; }
+    #bar { height:100%; width:0%; background:var(--accent); transition:width .25s ease; }
+    .hint { color:var(--muted); font-size:12px; }
     .small { font-size:12px; padding:6px 8px; border-radius:8px; }
     optgroup[label] { color:#b6c8ff; font-weight:600; font-style:normal; }
+    .banner { background:#2a1b1b; border:1px solid #6a3b3b; padding:10px; border-radius:10px; margin:10px 0; }
   </style>
 </head>
 <body>
@@ -31,6 +35,8 @@
   </header>
 
   <main>
+    <div id="envBanner"></div>
+
     <div class="toolbar">
       <div class="input-group" style="min-width:360px;">
         <label>モデル
@@ -106,9 +112,15 @@
     const log = $("#log");
     const progress = $("#progress");
     const bar = $("#bar");
+    const envBanner = $("#envBanner");
 
-    gpu.textContent = navigator.gpu ? "GPU: WebGPU 利用可能" : "GPU: WebGPU 非対応";
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
+    // --- Service Worker（ファイル名を sw.js に統一）---
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(console.warn);
+    }
+
+    // --- GPU 表示 ---
+    gpu.textContent = navigator.gpu ? "GPU: WebGPU 利用可能（要HTTPS/localhost）" : "GPU: WebGPU 非対応";
 
     // ---- 7Bまで抽出 & ダウンロード済み検出 ----
     function human(id){ return id.replace(/[-_]/g,' ').replace(/ q(\d)/i,' q$1'); }
@@ -134,7 +146,6 @@
     }
 
     async function rebuildMenu(){
-      // 公式一覧→7B以下を抽出（サイズ不明は一旦候補に含める）
       const all = (appConfig.model_list||[])
         .map(m => m?.model_id).filter(Boolean)
         .filter(id => {
@@ -142,14 +153,12 @@
           return (s == null || s <= 7.01); // 7Bまで
         });
 
-      // instruct/it を優先
       const isPref = id => /(-Instruct-|[-_.]it[-_.])/i.test(id) && /q4/i.test(id);
       const orderBySize = (a,b) => {
         const sa = sizeB(a) ?? 99, sb = sizeB(b) ?? 99;
         return sa - sb;
       };
 
-      // ダウンロード済み推定
       const local = getLocalDownloaded();
       const idxdb = await guessDownloadedByIndexedDB(all);
       const downloaded = new Set([...local, ...idxdb]);
@@ -162,7 +171,6 @@
         return orderBySize(a,b);
       });
 
-      // DOM
       modelSel.innerHTML = '';
       const ogDL = document.createElement('optgroup'); ogDL.label = '★ ダウンロード済み（7Bまで）';
       const ogAll = document.createElement('optgroup'); ogAll.label = 'すべて（7Bまで）';
@@ -212,7 +220,56 @@
       if (p>=1) setTimeout(()=>{ progress.hidden=true; bar.style.width='0%'; }, 400);
     }
 
+    // ---- 環境チェック＆案内 ----
+    function explainAndDisable(reason) {
+      const banner = document.createElement('div');
+      banner.className = 'banner';
+      banner.innerHTML = [
+        '⚠️ WebGPU を利用できないため、ローカル推論を開始できません。',
+        `<div style="color:#ddd;margin-top:6px;">${reason}</div>`,
+        '<ul style="margin:8px 0 0 18px;color:#bbb;font-size:13px;line-height:1.5;">' +
+          '<li>対応ブラウザ（Chrome/Edge/Safari 最新版など）を使用</li>' +
+          '<li>デスクトップ環境で実行（iOS Safari は未対応）</li>' +
+          '<li>HTTPS または localhost で配信</li>' +
+          '<li>社内ポリシーや拡張機能で WebGPU がブロックされていないか確認</li>' +
+          '<li>（古い Chrome 系）chrome://flags で <b>Unsafe WebGPU</b> を有効化</li>' +
+        '</ul>'
+      ].join('');
+      envBanner.replaceChildren(banner);
+
+      loadBtn.disabled = true;
+      sendBtn.disabled = true;
+      loadBtn.textContent = 'WebGPU未利用のため無効';
+    }
+
+    async function ensureWebGPU() {
+      const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      if (!isSecure) {
+        explainAndDisable('このページは HTTPS（または localhost）で配信されていません。');
+        return false;
+      }
+      if (!('gpu' in navigator)) {
+        explainAndDisable('このブラウザは navigator.gpu を提供していません（WebGPU未対応）。');
+        return false;
+      }
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          explainAndDisable('GPU アダプタが取得できません（ドライバや権限の問題の可能性）。');
+          return false;
+        }
+      } catch (e) {
+        explainAndDisable('WebGPU 初期化でエラーが発生しました。ブラウザ設定や拡張機能を確認してください。');
+        return false;
+      }
+      return true;
+    }
+
+    // ---- モデル読み込み ----
     async function loadModel() {
+      const ok = await ensureWebGPU();
+      if (!ok) return;
+
       const modelId = modelSel.value;
       setProgress(0.01);
       pushMessage('system', `モデル読み込み中: ${modelId}`);
@@ -222,14 +279,12 @@
           initProgressCallback: r => { if (r.progress != null) setProgress(r.progress); }
         });
         pushMessage('system', `準備完了: ${modelId}`);
-        // 記録→次回は★で上位表示
         const set = getLocalDownloaded(); set.add(modelId); saveLocalDownloaded(set);
         localStorage.setItem('model_id', modelId);
         await rebuildMenu();
       }catch(e){
         console.error(e);
-        pushMessage('system', `読み込みエラー: ${String(e?.message||e)}`);
-        throw e;
+        pushMessage('system', `読み込みエラー: ${String(e?.message||e)}\n→ WebGPU が無効/ブロックされていないか、配信元が HTTPS か確認してください。`);
       }
     }
 
@@ -237,6 +292,7 @@
       const text = input.value.trim();
       if (!text) return;
       if (!engine) await loadModel();
+      if (!engine) return; // 環境NG時は何もしない
 
       input.value = '';
       pushMessage('user', text);
@@ -260,10 +316,63 @@
       chatHistory.push({ role:'assistant', content:acc });
     }
 
-    document.getElementById('load').addEventListener('click', loadModel);
-    document.getElementById('clear').addEventListener('click', ()=>{ chatHistory=[]; log.innerHTML=''; });
-    document.getElementById('send').addEventListener('click', send);
+    loadBtn.addEventListener('click', loadModel);
+    clearBtn.addEventListener('click', ()=>{ chatHistory=[]; log.innerHTML=''; });
+    sendBtn.addEventListener('click', send);
     input.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }});
+
+    // 起動時チェック
+    (async () => {
+      const ok = await ensureWebGPU();
+      gpu.textContent = ok ? 'GPU: WebGPU 利用可能' : 'GPU: WebGPU 未利用（上の案内を参照）';
+    })();
   </script>
 </body>
 </html>
+```
+
+---
+
+# sw.js
+
+```js
+const CACHE = 'browser-llm-v2';
+const STATIC_ASSETS = ['/', '/index.html', '/sw.js'];
+
+self.addEventListener('install', (e) => {
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(STATIC_ASSETS)));
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+    )
+  );
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  // 同一オリジンのみ。CDN等のモデル取得は妨げない
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
+  event.respondWith((async () => {
+    try {
+      const net = await fetch(req);
+      const cache = await caches.open(CACHE);
+      cache.put(req, net.clone());
+      return net;
+    } catch {
+      const cached = await caches.match(req);
+      if (cached) return cached;
+      if (req.mode === 'navigate') return caches.match('/index.html');
+      throw new Error('offline and not cached');
+    }
+  })());
+});
+```
